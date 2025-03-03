@@ -3,12 +3,14 @@
 /**
  * This code implements the HkDevMaintenanceMode class.
  *
- * The HkDevMaintenanceMode class implements a maintenance mode
- * for the application.
+ * The HkDevMaintenanceMode class implements a maintenance mode for the application.
  *
  * @package HkDevMaintenanceMode
  * @access  public
  */
+
+
+if (!defined('ABSPATH')) die();
 
 if (class_exists("HkDevMaintenanceMode") === false) {
 
@@ -107,7 +109,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
         }
 
         // (php) get and return an array of admin options. if no options set, initialize.
-        private function get_admin_options()
+        public function get_admin_options()
         {
             $hkdev_mm_options = array(
                 'enable_mm'             => 'no',
@@ -203,7 +205,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
 
                     if (in_array($temp_access_key, $valid_aks)) {
                         $hkdev_mm_cookie_time = time() + (60 * 60 * 24 * 365);
-                        setcookie('hkdev_mm_access_key', $temp_access_key, $hkdev_mm_cookie_time, '/');
+                        setcookie('hkdev_mm_access_key', $temp_access_key, $hkdev_mm_cookie_time, '/', '', true, true);
                         $_COOKIE['hkdev_mm_access_key'] = $temp_access_key;
                     }
                 }
@@ -280,7 +282,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
 
                             // check for access key in URL
                             if (count($hkdev_matches) == 0) {
-                                
+                                                                
                                 // no match found. show maintenance page / message
                                 if ($hkdev_mm_options['method'] == 'redirect') {
                                     // redirect
@@ -304,6 +306,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                 } // end if user is admin
             } // end if admin pages
         }
+        //...
 
         // (php) toggle maintenance mode (hk)
         public function toggle_maintenance_mode()
@@ -1425,7 +1428,10 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                     <div class="ajax_notices"></div>
 
                     <div class="notice notice-info">
-                        <p><?php echo sprintf(esc_html(__("This plugin is intended primarily for developers that need to allow clients to preview sites before being available to the general public.%sAny logged in user with WordPress administrator privileges will be allowed to view the site regardless of the settings below.", 'hkdev-maintenance-mode')),'<br>'); ?></p>
+                        <p>
+                            <?php echo sprintf(esc_html(__("This plugin is intended primarily for developers that need to allow clients to preview sites before being available to the general public.%sAny logged in user with WordPress administrator privileges will be allowed to view the site regardless of the settings below.", 'hkdev-maintenance-mode')),'<br>'); ?><br>
+                            <?php echo sprintf(esc_html__("If you liked this plugin or it was useful to you in any way, I'd be very grateful if you'd %s.", 'hkdev-maintenance-mode'), '<a href="https://paypal.me/helderk" target="_blank" rel="noopener noreferrer">' . esc_html__('pay me a coffee', 'hkdev-maintenance-mode') . '</a>'); ?>
+                        </p>
                     </div>
 
                     <h3><?php esc_html_e("Enable Maintenance Mode", 'hkdev-maintenance-mode'); ?></h3>

@@ -2,20 +2,21 @@
 Contributors: helderk, jfinch3, petervandoorn
 Tags: maintenance,redirect,developer,coming soon,under construction
 Requires at least: 6.1
-Tested up to: 6.4.3
-Stable tag: 2.4
+Tested up to: 6.7.2
+Stable tag: 3.0.1
 Requires PHP: 7.4
 Text Domain: hkdev-maintenance-mode
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
+Donate link: https://paypal.me/helderk
 
 This plugin is intended primarily for developers that need to allow clients to preview sites before being available to the general public or to temporarily hide your WordPress site while undergoing major updates.
 
 
 == Description ==
-This plugin is based on an older version of the "Maintenance Redirect" plugin developed by Jack Finch and Peter Hardy-vanDoorn.
+This plugin lets you specify a maintenance mode message or HTML page for your site and configure settings to allow specific users to bypass the maintenance mode functionality in order to preview the site prior to public launch. 
 
-Allows you to specify a maintenance mode message or HTML page for your site as well as configure settings to allow specific users to bypass the maintenance mode functionality in order to preview the site prior to public launch, etc.
+It also disables the WordPress REST API while maintenance mode is active, ensuring that site data remains inaccessible during maintenance. 
 
 Any logged in user with WordPress administrator privileges will be allowed to view the site regardless of the settings in the plugin. The exact privilege can be set using a filter hook - see FAQs.
 
@@ -35,13 +36,6 @@ This plugin allows four methods of notifying users that a site is undergoing mai
   2. They can be presented with a message on a page created with the style of the current template.
   3. They can be presented with a custom HMTL page.
   4. They can be redirected to a static page or external URL.
-
-
-## Important Notice
-**Note on REST API Access**
-
-This plugin does not block access to the WordPress REST API. If you require blocking or restricting access to the REST API, we recommend using alternative methods or dedicated plugins designed for this purpose.
-
 
 
 == Installation ==
@@ -86,6 +80,11 @@ This filter is used to pass a different WordPress capability to check if the log
 
 
 == Changelog ==
+
+= 3.1.1 =
+* Updated for WordPress 6.7
+* Added functionality to disable the WordPress REST API while maintenance mode is active
+* Security improvements
 
 = 3.0.2 =
 * Security improvements

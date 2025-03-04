@@ -81,6 +81,9 @@ This filter is used to pass a different WordPress capability to check if the log
 
 == Changelog ==
 
+= 3.1.2 =
+* Bug fix
+
 = 3.1.1 =
 * Updated for WordPress 6.7
 * Added functionality to disable the WordPress REST API while maintenance mode is active

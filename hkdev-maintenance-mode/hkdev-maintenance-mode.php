@@ -3,7 +3,7 @@
  * Plugin Name:		Maintenance Mode
  * Plugin URI:		https://helderk.com/
  * Description:		Simple Maintenance Mode for Developers
- * Version:			3.1.1
+ * Version:			3.1.2
  * Tested up to:	6.7.2
  * Text Domain:		hkdev-maintenance-mode
  * Domain Path:		/languages/
@@ -83,11 +83,19 @@ function hkdev_maintenance_mode_initialize(){
 	// actions and filters	
 	if( isset( $hkdev_MM ) ) {
 
-		//TODO: add filter to disable REST API if maintenance mode is active
 		// disable REST API if maintenance mode is active
 	 	$admin_options = $hkdev_MM->get_admin_options();
 		if($admin_options['enable_mm']=='YES') {
-			include_once( plugin_dir_path( __FILE__ ) . 'hkdev-disable-rest-api.php' );
+			$disable_rest_api = plugin_dir_path( __FILE__ ) . 'hkdev-disable-rest-api.php';
+			if( file_exists( $disable_rest_api ) ) {
+				include_once( $disable_rest_api );
+				
+			} else {
+				//add WP notice notice-error
+				add_action( 'admin_notices', function() {
+					echo '<div class="notice notice-error"><p>' . __( 'The REST API is not disabled because the plugin has encountered an error. Please reinstall the plugin.', 'hkdev-maintenance-mode' ) . '</p></div>';
+				} );
+			}
 		}
 	
 

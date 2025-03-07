@@ -28,6 +28,8 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             $this->maintenance_html_head = '<!DOCTYPE html><html><head><link href="[[WP_STYLE]]" rel="stylesheet" type="text/css" /><title>[[WP_TITLE]]</title></head><body><div style="margin: auto;max-width: 800px;">';
             $this->maintenance_html_body = esc_html(_x('<h1>Website Under Maintenance</h1>Our Website is currently undergoing scheduled maintenance. Please check back soon.', 'Maintenance message', 'hkdev-maintenance-mode'));
             $this->maintenance_html_foot = '</div></body></html>';
+
+            $this->init(); // initialize
         }
 
         // (php) initialize.

@@ -81,6 +81,9 @@ This filter is used to pass a different WordPress capability to check if the log
 
 == Changelog ==
 
+= 3.1.3 =
+* Bug fix
+
 = 3.1.2 =
 * Bug fix
 

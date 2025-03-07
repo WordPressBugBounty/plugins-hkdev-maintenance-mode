@@ -3,7 +3,7 @@
  * Plugin Name:		Maintenance Mode
  * Plugin URI:		https://helderk.com/
  * Description:		Simple Maintenance Mode for Developers
- * Version:			3.1.2
+ * Version:			3.1.3
  * Tested up to:	6.7.2
  * Text Domain:		hkdev-maintenance-mode
  * Domain Path:		/languages/

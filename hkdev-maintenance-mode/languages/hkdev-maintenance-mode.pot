@@ -96,6 +96,10 @@ msgstr ""
 msgid "Delete"
 msgstr ""
 
+#: class-hkdev-maintenance-mode.php:778
+msgid "Copy"
+msgstr ""
+
 #: class-hkdev-maintenance-mode.php:512 class-hkdev-maintenance-mode.php:1161
 #: class-hkdev-maintenance-mode.php:1267
 msgid "Disable"
@@ -139,6 +143,11 @@ msgstr ""
 msgid "Enable Maintenance Mode"
 msgstr ""
 
+
+#: class-hkdev-maintenance-mode.php:1633
+#, php-format
+msgid "If you enjoyed this plugin or found it useful, I'd really appreciate it if you'd %s."
+msgstr ""
 #: class-hkdev-maintenance-mode.php:618
 msgid "Enter Email:"
 msgstr ""
@@ -433,6 +442,14 @@ msgstr ""
 
 #: class-hkdev-maintenance-mode.php:1550
 msgid "Update Settings"
+msgstr ""
+
+#: class-hkdev-maintenance-mode.php:1633
+msgid "buy me a coffee"
+msgstr ""
+
+#: hkdev-disable-rest-api.php:51
+msgid "REST API restricted to authenticated users."
 msgstr ""
 
 #: class-hkdev-maintenance-mode.php:1527

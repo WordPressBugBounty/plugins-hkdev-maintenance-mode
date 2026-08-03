@@ -1,9 +1,14 @@
 <?php
 
 /**
- * This code implements the HkDevMaintenanceMode class.
+ * Core maintenance mode implementation for the plugin.
  *
- * The HkDevMaintenanceMode class implements a maintenance mode for the application.
+ * This class is responsible for:
+ * - creating the database tables used for access keys and allowed IPs,
+ * - loading and storing the plugin settings,
+ * - deciding whether a request should be blocked by maintenance mode,
+ * - rendering the maintenance page or redirecting visitors,
+ * - handling the AJAX actions used by the admin settings screen.
  *
  * @package HkDevMaintenanceMode
  * @access  public
@@ -21,79 +26,118 @@ if (class_exists("HkDevMaintenanceMode") === false) {
         private $maintenance_html_foot;
         private $maintenance_html_body;
 
-        // (php) constructor.
+        /**
+         * Constructor.
+         *
+         * Sets the default option names, the maintenance page markup, and
+         * immediately initializes the plugin state.
+         */
         public function __construct()
         {
             $this->admin_options_name = "hkdev_mm";
             $this->maintenance_html_head = '<!DOCTYPE html><html><head><link href="[[WP_STYLE]]" rel="stylesheet" type="text/css" /><title>[[WP_TITLE]]</title></head><body><div style="margin: auto;max-width: 800px;">';
-            $this->maintenance_html_body = esc_html(_x('<h1>Website Under Maintenance</h1>Our Website is currently undergoing scheduled maintenance. Please check back soon.', 'Maintenance message', 'hkdev-maintenance-mode'));
+            $this->maintenance_html_body = _x('<h1>Website Under Maintenance</h1>Our Website is currently undergoing scheduled maintenance. Please check back soon.', 'Maintenance message', 'hkdev-maintenance-mode');
             $this->maintenance_html_foot = '</div></body></html>';
 
             $this->init(); // initialize
         }
 
-        // (php) initialize.
+        /**
+         * Initialize the plugin database and defaults.
+         *
+         * This method ensures the custom tables for access keys and unrestricted IPs
+         * exist, and it creates the default plugin options if they are missing.
+         */
         public function init()
         {
             global $wpdb;
 
-            // create keys table if needed.
+            // Create the access keys table if it does not exist yet.
             $def_time = '0000-00-00 00:00:00';
-            $tbl = $wpdb->prefix . $this->admin_options_name . "_access_keys";
-            if ($wpdb->get_var("SHOW TABLES LIKE '$tbl'") != $tbl) {
-                $sql = $wpdb->prepare("CREATE TABLE $tbl (id int auto_increment primary key, `name` varchar(100), access_key varchar(20), email varchar(100), created_at datetime NOT NULL DEFAULT %s, active int(1) NOT NULL DEFAULT 1)", $def_time);
-                $wpdb->query($sql);
+            $tbl = esc_sql($wpdb->prefix . $this->admin_options_name . "_access_keys");
+            if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tbl)) !== $tbl) {
+                $wpdb->query($wpdb->prepare("CREATE TABLE %i (id int auto_increment primary key, `name` varchar(100), access_key varchar(20), email varchar(100), created_at datetime NOT NULL DEFAULT %s, active int(1) NOT NULL DEFAULT 1)", $tbl, $def_time));
             }
 
-            // create IPs table if needed
-            $tbl = $wpdb->prefix . $this->admin_options_name . "_unrestricted_ips";
-            if ($wpdb->get_var("SHOW TABLES LIKE '$tbl'") != $tbl) {
-                $sql = $wpdb->prepare("CREATE TABLE $tbl (id int auto_increment primary key, `name` varchar(100), ip_address varchar(20), created_at datetime NOT NULL DEFAULT %s, active int(1) NOT NULL DEFAULT 1)", $def_time);
-                $wpdb->query($sql);
+            // Create IPs table if needed
+            $tbl = esc_sql($wpdb->prefix . $this->admin_options_name . "_unrestricted_ips");
+            if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tbl)) !== $tbl) {
+                $wpdb->query($wpdb->prepare("CREATE TABLE %i (id int auto_increment primary key, `name` varchar(100), ip_address varchar(20), created_at datetime NOT NULL DEFAULT %s, active int(1) NOT NULL DEFAULT 1)", $tbl, $def_time));
             }
 
-            // setup options
-            add_option("hkdev_maintenance_mode_version", "1.6");
+            // Setup options
+            add_option("hkdev_maintenance_mode_version", "1.7");
             $tmp_opt = $this->get_admin_options();
         }
 
-        // (php) find user IP.
+        /**
+         * Find the user's IP address.
+         *
+         * This method checks the REMOTE_ADDR server variable and validates it.
+         */
         private function get_user_ip()
         {
-            $client_ip = $_SERVER['REMOTE_ADDR'] ?? null;
+            $client_ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : null;
 
-            if (filter_var($client_ip, FILTER_VALIDATE_IP)) {
+            if ($client_ip && filter_var($client_ip, FILTER_VALIDATE_IP)) {
                 return $client_ip;
             }
             return null;
         }
 
-        // (php) determine user class c
+        /**
+         * Determine the user's class C IP address.
+         *
+         * This method returns the first three octets of the user's IP address,
+         * followed by a wildcard, e.g., 192.168.1.*.
+         */
         private function get_user_class_c()
         {
             $ip = $this->get_user_ip();
-            $ip_parts = explode('.', $ip);
 
-            // Check if $ip_parts has at least 3 elements
-            if (count($ip_parts) >= 3) {
-                $class_c = $ip_parts[0] . '.' . $ip_parts[1] . '.' .$ip_parts[2] . '.*';
-                return $class_c;
-            } else {
-                // Return default value
+            if (!$ip) {
                 return '0.0.0.*';
             }
+
+            $ip_parts = explode('.', $ip);
+
+            if (count($ip_parts) >= 3) {
+                $class_c = $ip_parts[0] . '.' . $ip_parts[1] . '.' . $ip_parts[2] . '.*';
+                return $class_c;
+            }
+
+            return '0.0.0.*';
         }
 
-        // (php) get post pages
+        /**
+         * Handle the AJAX request to search for posts.
+         *
+         * This method is called via AJAX and returns a JSON array of post IDs and titles
+         * matching the search query.
+         */
         public function get_posts_ajax_callback()
         {
+            if (!current_user_can('manage_options')) {
+                wp_die(-1);
+            }
+
+            check_ajax_referer('hkdev_nonce', 'security');
+
             $return = array();
+            $search_query = isset($_GET['q']) ? sanitize_text_field(wp_unslash($_GET['q'])) : '';
+
+            if ($search_query === '') {
+                wp_send_json($return);
+            }
 
             $search_results = new WP_Query(array(
-                's' => sanitize_text_field($_GET['q']),
+                's' => $search_query,
+                'post_type' => array('page', 'post'),
                 'post_status' => 'publish',
                 'ignore_sticky_posts' => 1,
-                'posts_per_page' => 10
+                'posts_per_page' => 10,
+                'orderby' => 'title',
+                'order' => 'ASC'
             ));
         
             if ($search_results->have_posts()) {
@@ -106,11 +150,15 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             }
         
             wp_reset_postdata();
-            echo json_encode($return);
-            wp_die();
+            wp_send_json($return);
         }
 
-        // (php) get and return an array of admin options. if no options set, initialize.
+        /**
+         * Return the plugin options with safe defaults.
+         *
+         * If no saved options exist yet, the method initializes the default values
+         * so the maintenance mode logic can run immediately.
+         */
         public function get_admin_options()
         {
             $hkdev_mm_options = array(
@@ -129,7 +177,14 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             if (!empty($hkdev_mm_saved_options) && is_array($hkdev_mm_saved_options)) {
                 foreach ($hkdev_mm_options as $key => $value) {
                     if (array_key_exists($key, $hkdev_mm_saved_options)) {
-                        $hkdev_mm_options[$key] = $hkdev_mm_saved_options[$key];
+                        $saved_value = $hkdev_mm_saved_options[$key];
+
+                        if (in_array($key, array('maintenance_message', 'maintenance_html'), true)) {
+                            $saved_value = wp_unslash($saved_value);
+                            $saved_value = html_entity_decode((string) $saved_value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                        }
+
+                        $hkdev_mm_options[$key] = $saved_value;
                     }
                 }
             } else {
@@ -139,7 +194,12 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             return $hkdev_mm_options;
         }
 
-        // (php) generate maintenance page
+        /**
+         * Render the maintenance page or terminate the request with a message.
+         *
+         * This method is used when a visitor should not be allowed to continue, and
+         * it decides whether to show a plain message, an HTML page, or a redirect.
+         */
         private function generate_maintenance_page($content_override = '', $method = 'die_message')
         {
             $hkdev_mm_options = $this->get_admin_options();
@@ -157,19 +217,34 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             $site_title = ($site_title!='') ? $site_title: get_bloginfo('name');
 
             if ($method == 'html') {
-                echo ($content_override != '') ? stripslashes($content_override) : $this->maintenance_html_body;
+                $content = ($content_override !== '') ? wp_unslash($content_override) : $this->maintenance_html_body;
+                echo wp_kses_post($content);
                 exit();
             } elseif ($method == 'site_message') {
+                $allowed_html = array(
+                    'html' => array('lang' => array(), 'style' => array()),
+                    'head' => array(),
+                    'body' => array('style' => array()),
+                    'title' => array(),
+                    'link' => array('href' => array(), 'rel' => array(), 'type' => array()),
+                    'div' => array('style' => array(), 'class' => array(), 'id' => array()),
+                    'style' => array('type' => array()),
+                    'p' => array('class' => array(), 'id' => array(), 'style' => array()),
+                    'h1' => array('class' => array(), 'id' => array(), 'style' => array()),
+                    'strong' => array(),
+                    'br' => array(),
+                );
                 $out  = $this->maintenance_html_head;
                 $out  = str_replace('[[WP_TITLE]]', esc_html($site_title), $out);
                 $out  = str_replace('[[WP_STYLE]]', esc_url(get_bloginfo('stylesheet_url')), $out);
-                $out .= ($content_override != '') ? stripslashes($content_override) : $this->maintenance_html_body;
+                $out .= ($content_override !== '') ? wp_kses_post(wp_unslash($content_override)) : wp_kses_post($this->maintenance_html_body);
                 $out .= $this->maintenance_html_foot;
-                echo $out;
+                echo wp_kses($out, $allowed_html);
                 exit();
             } else {
-                $out  = ($content_override != '') ? stripslashes($content_override) : $this->maintenance_html_body;
-                wp_die($out, esc_html($site_title), ['response' => $hkdev_mm_options['header_type']]);
+                $out  = ($content_override !== '') ? wp_unslash($content_override) : $this->maintenance_html_body;
+                $response_code = in_array($hkdev_mm_options['header_type'], array('200', '503', '507'), true) ? absint($hkdev_mm_options['header_type']) : 503;
+                wp_die(wp_kses_post($out), esc_html($site_title), ['response' => absint($response_code)]);
             }
         }
 
@@ -177,14 +252,132 @@ if (class_exists("HkDevMaintenanceMode") === false) {
         {
             $url = get_permalink();
             if (empty($url)) {
-                $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http';
-                $url = $protocol . "://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
+                $protocol = isset($_SERVER['HTTPS']) && sanitize_text_field(wp_unslash($_SERVER['HTTPS'])) === 'on' ? 'https' : 'http';
+                $http_host = isset($_SERVER['HTTP_HOST']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_HOST'])) : '';
+                $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+                $url = $protocol . "://" . $http_host . $request_uri;
             }
             //$permalink = strtok($url, '?');
             return url_to_postid($url);
         }
 
-        // (php) find out if we need to redirect or not.
+        private function prevent_page_caching_for_maintenance()
+        {
+            if (headers_sent()) {
+                return;
+            }
+
+            if (function_exists('nocache_headers')) {
+                nocache_headers();
+                return;
+            }
+
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Pragma: no-cache');
+            header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
+        }
+
+        /**
+         * Determine whether the current request should bypass maintenance mode.
+         *
+         * Requests are allowed through when the user is an administrator, the page is
+         * excluded, the request uses a valid access key, or the visitor IP is on the
+         * allow list.
+         */
+        public function is_request_exempt_from_maintenance($request_uri = null, $page_id = null)
+        {
+            $request_uri = $request_uri ?? (isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '/');
+            $url_parts = explode('/', $request_uri);
+
+            if (in_array('wp-admin', $url_parts, true)) {
+                return true;
+            }
+
+            if (current_user_can(apply_filters('hkdev_user_can', 'manage_options'))) {
+                return true;
+            }
+
+            $hkdev_mm_options = $this->get_admin_options();
+
+            if ($hkdev_mm_options['enable_mm'] !== 'YES') {
+                return true;
+            }
+
+            if (isset($hkdev_mm_options['exclude_pages']) && is_array($hkdev_mm_options['exclude_pages'])) {
+                $page_id = $page_id ?? $this->hkdev_get_page_id();
+                if (in_array($page_id, $hkdev_mm_options['exclude_pages'], true)) {
+                    return true;
+                }
+            }
+
+            global $wpdb;
+            $valid_ips = array();
+            $valid_class_cs = array();
+            $valid_aks = array();
+
+            $tbl = esc_sql($wpdb->prefix . $this->admin_options_name . '_unrestricted_ips');
+            $ips = $wpdb->get_results($wpdb->prepare("SELECT ip_address FROM %i WHERE active = %d", $tbl, 1), OBJECT);
+            if ($ips && is_array($ips)) {
+                foreach ($ips as $ip) {
+                    $candidate_ip = isset($ip->ip_address) ? sanitize_text_field(wp_unslash($ip->ip_address)) : '';
+                    if (!$candidate_ip || !filter_var($candidate_ip, FILTER_VALIDATE_IP)) {
+                        continue;
+                    }
+
+                    $ip_parts = explode('.', $candidate_ip);
+
+                    if (count($ip_parts) === 4 && $ip_parts[3] === '*') {
+                        $valid_class_cs[] = $ip_parts[0] . '.' . $ip_parts[1] . '.' . $ip_parts[2];
+                    } else {
+                        $valid_ips[] = $candidate_ip;
+                    }
+                }
+            }
+
+            $tbl = esc_sql($wpdb->prefix . $this->admin_options_name . '_access_keys');
+            $aks = $wpdb->get_results($wpdb->prepare("SELECT access_key FROM %i WHERE active = %d", $tbl, 1), OBJECT);
+            if ($aks && is_array($aks)) {
+                foreach ($aks as $ak) {
+                    $valid_aks[] = $ak->access_key;
+                }
+            }
+
+            if (isset($_GET['hkdev_temp_access_key']) && trim((string) wp_unslash($_GET['hkdev_temp_access_key'])) !== '') {
+                $temp_access_key = sanitize_text_field(wp_unslash($_GET['hkdev_temp_access_key']));
+                if (in_array($temp_access_key, $valid_aks, true)) {
+                    return true;
+                }
+            }
+
+            if (isset($_COOKIE['hkdev_mm_access_key']) && trim((string) wp_unslash($_COOKIE['hkdev_mm_access_key'])) !== '') {
+                if (in_array(wp_unslash($_COOKIE['hkdev_mm_access_key']), $valid_aks, true)) {
+                    return true;
+                }
+            }
+
+            $user_ip = $this->get_user_ip();
+            if ($user_ip && in_array($user_ip, $valid_ips, true)) {
+                return true;
+            }
+
+            if ($user_ip) {
+                $ip_parts = explode('.', $user_ip);
+                $user_class_c = (count($ip_parts) >= 3) ? $ip_parts[0] . '.' . $ip_parts[1] . '.' . $ip_parts[2] : '';
+                if (in_array($user_class_c, $valid_class_cs, true)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /**
+         * Main request flow for maintenance mode.
+         *
+         * This method checks the current request, applies cache-protection headers,
+         * validates access keys and IPs, and stops the request by rendering the
+         * maintenance page when the visitor should be blocked.
+         */
         public function process_redirect()
         {
             global $wpdb;
@@ -193,17 +386,17 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             $valid_aks      = array();
             $hkdev_matches  = apply_filters('hkdev_matches', array());
             // set cookie if needed
-            if (isset($_GET['hkdev_temp_access_key']) && trim($_GET['hkdev_temp_access_key']) != '') {
+            if (isset($_GET['hkdev_temp_access_key']) && trim((string) wp_unslash($_GET['hkdev_temp_access_key'])) !== '') {
                 // get valid access keys
-                $sql = "SELECT access_key FROM {$wpdb->prefix}{$this->admin_options_name}_access_keys WHERE active = 1";
-                $aks = $wpdb->get_results($sql, OBJECT);
+                $tbl = esc_sql($wpdb->prefix . $this->admin_options_name . '_access_keys');
+                $aks = $wpdb->get_results($wpdb->prepare("SELECT access_key FROM %i WHERE active = %d", $tbl, 1), OBJECT);
 
                 if ($aks) {
                     $valid_aks = array_map(function($ak) {
                         return $ak->access_key;
                     }, $aks);
 
-                    $temp_access_key = sanitize_text_field($_GET['hkdev_temp_access_key']);
+                    $temp_access_key = sanitize_text_field(wp_unslash($_GET['hkdev_temp_access_key']));
 
                     if (in_array($temp_access_key, $valid_aks)) {
                         $hkdev_mm_cookie_time = time() + (60 * 60 * 24 * 365);
@@ -213,32 +406,39 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                 }
             }
  
-            // get plugin options
+            // Get plugin options
             $hkdev_mm_options = $this->get_admin_options();
 
-            // skip admin pages by default
-            $url_parts = explode('/', $_SERVER['REQUEST_URI']);
+            // Skip admin pages by default
+            $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '/';
+            $url_parts = explode('/', $request_uri);
 
-            if (in_array('wp-admin', $url_parts)) {
+            if (in_array('wp-admin', $url_parts, true)) {
                 $hkdev_matches[] = "<!-- WPHKDEV_MM: SKIPPING ADMIN -->";
             } else {
 
-                // determine if user is admin.. if so, bypass all of this.
+                /*
+                 * Check if the current request should be exempt from maintenance mode.
+                 * This includes checks for admin users, excluded pages, valid access keys,
+                 * and allowed IP addresses.
+                 */
                 if (current_user_can(apply_filters('hkdev_user_can', 'manage_options'))) {
                     $hkdev_matches[] = "<!-- WPHKDEV_MM: USER IS ADMIN -->";
                 } else {
 
-                    //if page excluded
+                    // If page excluded
                     if (isset($hkdev_mm_options['exclude_pages']) && in_array($this->hkdev_get_page_id(), $hkdev_mm_options['exclude_pages'])) {
                         $hkdev_matches[] = "<!-- WPHKDEV_MM: PAGE EXCLUDED -->";
                     } else {
 
-                        if ($hkdev_mm_options['enable_mm'] == "YES") {
+                        if ($hkdev_mm_options['enable_mm'] === 'YES') {
 
-                            // get valid unrestricted IPs
+                            $this->prevent_page_caching_for_maintenance();
+
+                            // Get valid unrestricted IPs
                             global $wpdb;
-                            $sql = "SELECT ip_address FROM {$wpdb->prefix}hkdev_mm_unrestricted_ips WHERE active = 1";
-                            $ips = $wpdb->get_results($sql, OBJECT);
+                            $tbl = esc_sql($wpdb->prefix . $this->admin_options_name . '_unrestricted_ips');
+                            $ips = $wpdb->get_results($wpdb->prepare("SELECT ip_address FROM %i WHERE active = %d", $tbl, 1), OBJECT);
 
                             if ($ips && is_array($ips)) {
                                 foreach ($ips as $ip) {
@@ -252,25 +452,25 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                                 }
                             }
                             
-                            // get valid access keys
+                            // Get valid access keys
                             $valid_aks = array();
-                            $sql = "SELECT access_key FROM {$wpdb->prefix}{$this->admin_options_name}_access_keys WHERE active = 1";
-                            $aks = $wpdb->get_results($sql, OBJECT);
+                            $tbl = esc_sql($wpdb->prefix . $this->admin_options_name . '_access_keys');
+                            $aks = $wpdb->get_results($wpdb->prepare("SELECT access_key FROM %i WHERE active = %d", $tbl, 1), OBJECT);
                             if ($aks && is_array($aks)) {
                                 foreach ($aks as $ak) {
                                     $valid_aks[] = $ak->access_key;
                                 }
                             }
                             
-                            // manage cookie filtering
-                            if (isset($_COOKIE['hkdev_mm_access_key']) && $_COOKIE['hkdev_mm_access_key'] != '') {
+                            // Manage cookie filtering
+                            if (isset($_COOKIE['hkdev_mm_access_key']) && trim((string) wp_unslash($_COOKIE['hkdev_mm_access_key'])) !== '') {
                                 // check versus active codes
-                                if (in_array($_COOKIE['hkdev_mm_access_key'], $valid_aks)) {
+                                if (in_array(wp_unslash($_COOKIE['hkdev_mm_access_key']), $valid_aks)) {
                                     $hkdev_matches[] = "<!-- WPHKDEV_MM: COOKIE MATCH -->";
                                 }
                             }
 
-                            // manage ip filtering 
+                            // Manage IP filtering
                             if (in_array($this->get_user_ip(), $valid_ips)) {
                                 $hkdev_matches[] = "<!-- WPHKDEV_MM: IP MATCH -->";
                             } else {
@@ -282,9 +482,9 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                                 }
                             }
 
-                            // check for access key in URL
+                            // Check for access key in URL
                             if (count($hkdev_matches) == 0) {
-                                                                
+
                                 // no match found. show maintenance page / message
                                 if ($hkdev_mm_options['method'] == 'redirect') {
                                     // redirect
@@ -310,7 +510,9 @@ if (class_exists("HkDevMaintenanceMode") === false) {
         }
         //...
 
-        // (php) toggle maintenance mode (hk)
+        /**
+         * Toggle the global maintenance mode setting from the admin UI.
+         */
         public function toggle_maintenance_mode()
         {
             $hkdev_mm_options = $this->get_admin_options();
@@ -326,17 +528,16 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             die();
         }
 
-        // (php) toggle IP status
+        // Toggle IP status
         public function toggle_ip_status()
         {
             if (!current_user_can('manage_options')) wp_die("Oh no you don't!");
             check_ajax_referer('hkdev_nonce', 'security');
             global $wpdb;
-            $tbl       = $wpdb->prefix . $this->admin_options_name . '_unrestricted_ips';
-            $ip_id     = absint($_POST['hkdev_mm_ip_id']);
-            $ip_active = ($_POST['hkdev_mm_ip_active'] == 1) ? 1 : 0;
-            $sql       = $wpdb->prepare("UPDATE $tbl SET active = %s WHERE id = %d", $ip_active, $ip_id);
-            $rs        = $wpdb->query($sql);
+            $tbl       = esc_sql($wpdb->prefix . $this->admin_options_name . '_unrestricted_ips');
+            $ip_id     = absint(isset($_POST['hkdev_mm_ip_id']) ? wp_unslash($_POST['hkdev_mm_ip_id']) : 0);
+            $ip_active = (isset($_POST['hkdev_mm_ip_active']) && (int) wp_unslash($_POST['hkdev_mm_ip_active']) === 1) ? 1 : 0;
+            $rs        = $wpdb->query($wpdb->prepare("UPDATE %i SET active = %d WHERE id = %d", $tbl, $ip_active, $ip_id));
             if ($rs) {
                 // $this->print_unrestricted_ips();
                 wp_send_json_success(array('ip_id' => $ip_id, 'ip_active' => $ip_active));
@@ -346,17 +547,16 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             die();
         }
 
-        // (php) add new IP
+        // Add new IP
         public function add_new_ip()
         {
             if (!current_user_can('manage_options')) wp_die("Oh no you don't!");
             check_ajax_referer('hkdev_nonce', 'security');
             global $wpdb;
-            $tbl        = $wpdb->prefix . $this->admin_options_name . '_unrestricted_ips';
-            $name       = sanitize_text_field($_POST['hkdev_mm_ip_name']);
-            $ip_address = sanitize_text_field(trim($_POST['hkdev_mm_ip_ip']));
-            $sql        = $wpdb->prepare("INSERT INTO $tbl (`name`, ip_address, created_at) VALUES (%s, %s, NOW())", $name, $ip_address);
-            $rs         = $wpdb->query($sql);
+            $tbl        = esc_sql($wpdb->prefix . $this->admin_options_name . '_unrestricted_ips');
+            $name       = sanitize_text_field(isset($_POST['hkdev_mm_ip_name']) ? wp_unslash($_POST['hkdev_mm_ip_name']) : '');
+            $ip_address = sanitize_text_field(trim(isset($_POST['hkdev_mm_ip_ip']) ? wp_unslash($_POST['hkdev_mm_ip_ip']) : ''));
+            $rs         = $wpdb->query($wpdb->prepare("INSERT INTO %i (`name`, ip_address, created_at) VALUES (%s, %s, NOW())", $tbl, $name, $ip_address));
             if ($rs) {
                 // send table data
                 $this->print_unrestricted_ips();
@@ -366,16 +566,15 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             die();
         }
 
-        // (php) delete IP
+        // Delete IP
         public function delete_ip()
         {
             if (!current_user_can('manage_options')) wp_die("Oh no you don't!");
             check_ajax_referer('hkdev_nonce', 'security');
             global $wpdb;
-            $tbl       = $wpdb->prefix . $this->admin_options_name . '_unrestricted_ips';
-            $ip_id     = absint($_POST['hkdev_mm_ip_id']);
-            $sql       = $wpdb->prepare("DELETE FROM $tbl WHERE id = %d", $ip_id);
-            $rs        = $wpdb->query($sql);
+            $tbl       = esc_sql($wpdb->prefix . $this->admin_options_name . '_unrestricted_ips');
+            $ip_id     = absint(isset($_POST['hkdev_mm_ip_id']) ? wp_unslash($_POST['hkdev_mm_ip_id']) : 0);
+            $rs        = $wpdb->query($wpdb->prepare("DELETE FROM %i WHERE id = %d", $tbl, $ip_id));
             if ($rs) {
                 $this->print_unrestricted_ips();
             } else {
@@ -384,17 +583,16 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             die();
         }
 
-        // (php) toggle Access Key status
+        // Toggle Access Key status
         public function toggle_ak_status()
         {
             if (!current_user_can('manage_options')) wp_die("Oh no you don't!");
             check_ajax_referer('hkdev_nonce', 'security');
             global $wpdb;
-            $tbl       = $wpdb->prefix . $this->admin_options_name . '_access_keys';
-            $ak_id     = absint($_POST['hkdev_mm_ak_id']);
-            $ak_active = ($_POST['hkdev_mm_ak_active'] == 1) ? 1 : 0;
-            $sql       = $wpdb->prepare("UPDATE $tbl SET active = %d WHERE id = %d", $ak_active, $ak_id);
-            $rs        = $wpdb->query($sql);
+            $tbl       = esc_sql($wpdb->prefix . $this->admin_options_name . '_access_keys');
+            $ak_id     = absint(isset($_POST['hkdev_mm_ak_id']) ? wp_unslash($_POST['hkdev_mm_ak_id']) : 0);
+            $ak_active = (isset($_POST['hkdev_mm_ak_active']) && (int) wp_unslash($_POST['hkdev_mm_ak_active']) === 1) ? 1 : 0;
+            $rs        = $wpdb->query($wpdb->prepare("UPDATE %i SET active = %d WHERE id = %d", $tbl, $ak_active, $ak_id));
             if ($rs) {
                 // $this->print_access_keys();
                 wp_send_json_success(array('ak_id' => $ak_id, 'ak_active' => $ak_active));
@@ -404,23 +602,30 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             die();
         }
 
-        // (php) add new Access Key
+        // Add new Access Key
         public function add_new_ak()
         {
             if (!current_user_can('manage_options')) wp_die("Oh no you don't!");
             check_ajax_referer('hkdev_nonce', 'security');
             global $wpdb;
-            $tbl        = $wpdb->prefix . $this->admin_options_name . '_access_keys';
-            $name       = sanitize_text_field($_POST['hkdev_mm_ak_name']);
-            $email      = sanitize_email($_POST['hkdev_mm_ak_email']);
+            $tbl        = esc_sql($wpdb->prefix . $this->admin_options_name . '_access_keys');
+            $name       = sanitize_text_field(isset($_POST['hkdev_mm_ak_name']) ? wp_unslash($_POST['hkdev_mm_ak_name']) : '');
+            $email      = sanitize_email(isset($_POST['hkdev_mm_ak_email']) ? wp_unslash($_POST['hkdev_mm_ak_email']) : '');
             $access_key = wp_generate_password(20, false);
-            $sql        = $wpdb->prepare("INSERT INTO $tbl (`name`, email, access_key, created_at) VALUES (%s, %s, %s, NOW())", $name, $email, $access_key);
-            $rs         = $wpdb->query($sql);
+            $rs         = $wpdb->query($wpdb->prepare("INSERT INTO %i (`name`, email, access_key, created_at) VALUES (%s, %s, %s, NOW())", $tbl, $name, $email, $access_key));
             if ($rs) {
                 // email user
-                $subject    = sprintf(esc_html(_x("Access Key Link for %s", 'Access Key Email Subject, %s = name of the website/blog', 'hkdev-maintenance-mode')), get_bloginfo());
-                $full_msg   = sprintf(esc_html(_x("The following link will provide you temporary access to %s:", 'Access Key Email Message, %s = name of the website/blog', 'hkdev-maintenance-mode')), get_bloginfo()) . "\n\n"; 
-                $full_msg  .= esc_html(_x("Please note that you must have cookies enabled for this to work.", 'Access Key Email Message (secong line)', 'hkdev-maintenance-mode')) . "\n\n";
+                $subject = sprintf(
+                    /* translators: %s: site name. */
+                    esc_html_x('Access Key Link for %s', 'Access Key Email Subject, %s = name of the website/blog', 'hkdev-maintenance-mode'),
+                    get_bloginfo()
+                );
+                $full_msg = sprintf(
+                    /* translators: %s: site name. */
+                    esc_html_x('The following link will provide you temporary access to %s:', 'Access Key Email Message, %s = name of the website/blog', 'hkdev-maintenance-mode'),
+                    get_bloginfo()
+                ) . "\n\n";
+                $full_msg  .= esc_html_x('Please note that you must have cookies enabled for this to work.', 'Access Key Email Message (secong line)', 'hkdev-maintenance-mode') . "\n\n";
                 $full_msg  .= get_bloginfo('url') . '?hkdev_temp_access_key=' . $access_key;
                 $mail_sent  = $email ? wp_mail($email, $subject, $full_msg) : false;
                 echo ($mail_sent) ? '<!-- SEND_SUCCESS -->'.PHP_EOL : '<!-- SEND_FAILURE -->'.PHP_EOL;
@@ -432,16 +637,15 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             die();
         }
 
-        // (php) delete Access Key
+        // Delete Access Key
         public function delete_ak()
         {
             if (!current_user_can('manage_options')) wp_die("Oh no you don't!");
             check_ajax_referer('hkdev_nonce', 'security');
             global $wpdb;
-            $tbl       = $wpdb->prefix . $this->admin_options_name . '_access_keys';
-            $ak_id     = absint($_POST['hkdev_mm_ak_id']);
-            $sql       = $wpdb->prepare("DELETE FROM $tbl WHERE id = %d", $ak_id);
-            $rs        = $wpdb->query($sql);
+            $tbl       = esc_sql($wpdb->prefix . $this->admin_options_name . '_access_keys');
+            $ak_id     = absint(isset($_POST['hkdev_mm_ak_id']) ? wp_unslash($_POST['hkdev_mm_ak_id']) : 0);
+            $rs        = $wpdb->query($wpdb->prepare("DELETE FROM %i WHERE id = %d", $tbl, $ak_id));
             if ($rs) {
                 $this->print_access_keys();
             } else {
@@ -450,20 +654,27 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             die();
         }
  
-        // (php) resend Access Key email
+        // Resend Access Key email
         public function resend_ak()
         {
             if (!current_user_can('manage_options')) wp_die("Oh no you don't!");
             check_ajax_referer('hkdev_nonce', 'security');
             global $wpdb;
-            $tbl       = $wpdb->prefix . $this->admin_options_name . '_access_keys';
-            $ak_id     = absint($_POST['hkdev_mm_ak_id']);
-            $sql       = $wpdb->prepare("SELECT * FROM $tbl WHERE id = %d", $ak_id);
-            $ak        = $wpdb->get_row($sql);
+            $tbl       = esc_sql($wpdb->prefix . $this->admin_options_name . '_access_keys');
+            $ak_id     = absint(isset($_POST['hkdev_mm_ak_id']) ? wp_unslash($_POST['hkdev_mm_ak_id']) : 0);
+            $ak        = $wpdb->get_row($wpdb->prepare("SELECT * FROM %i WHERE id = %d", $tbl, $ak_id));
             if ($ak) {
-                $subject    = sprintf(esc_html(_x("Access Key Link for %s", 'Resend Access Key Email Subject, %s = name of the website/blog', 'hkdev-maintenance-mode')), get_bloginfo());
-                $full_msg   = sprintf(esc_html(_x("The following link will provide you temporary access to %s:", 'Resend Access Key Email Message, %s = name of the website/blog', 'hkdev-maintenance-mode')), get_bloginfo()) . "\n\n"; 
-                $full_msg  .= esc_html(_x("Please note that you must have cookies enabled for this to work.", 'Resend Access Key Email Message (secong line)', 'hkdev-maintenance-mode')) . "\n\n";
+                $subject = sprintf(
+                    /* translators: %s: site name. */
+                    esc_html_x('Access Key Link for %s', 'Resend Access Key Email Subject, %s = name of the website/blog', 'hkdev-maintenance-mode'),
+                    get_bloginfo()
+                );
+                $full_msg = sprintf(
+                    /* translators: %s: site name. */
+                    esc_html_x('The following link will provide you temporary access to %s:', 'Resend Access Key Email Message, %s = name of the website/blog', 'hkdev-maintenance-mode'),
+                    get_bloginfo()
+                ) . "\n\n";
+                $full_msg  .= esc_html_x('Please note that you must have cookies enabled for this to work.', 'Resend Access Key Email Message (secong line)', 'hkdev-maintenance-mode') . "\n\n";
                 $full_msg  .= get_bloginfo('url') . '?hkdev_temp_access_key=' . $ak->access_key;
                 $mail_sent  = wp_mail($ak->email, $subject, $full_msg);
                 if  ($mail_sent) {
@@ -477,7 +688,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             die();
         }
 
-        // (php) generate IP table data 
+        // Generate IP table data
         private function print_unrestricted_ips()
         {
             global $wpdb;
@@ -493,26 +704,26 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                 </thead>
                 <tbody>
                     <?php
-                    $sql = "SELECT * FROM {$wpdb->prefix}{$this->admin_options_name}_unrestricted_ips ORDER BY `name`";
-                    $ips = $wpdb->get_results($sql, OBJECT);
+                    $tbl = esc_sql($wpdb->prefix . $this->admin_options_name . '_unrestricted_ips');
+                    $ips = $wpdb->get_results($wpdb->prepare("SELECT * FROM %i ORDER BY `name`", $tbl), OBJECT);
                     $ip_row_class = 'alternate';
                     if ($ips) {
                         foreach ($ips as $ip) {
                             ?>
                             <tr id="wphkdev-ip-<?php echo esc_attr($ip->id); ?>" valign="middle" class="<?php echo esc_attr($ip_row_class); ?>">
-                                <td class="column-hkdev-ip-name"><?php esc_html_e($ip->name); ?></td>
-                                <td class="column-hkdev-ip-ip"><?php esc_html_e($ip->ip_address); ?></td>
+                                <td class="column-hkdev-ip-name"><?php echo esc_html($ip->name); ?></td>
+                                <td class="column-hkdev-ip-ip"><?php echo esc_html($ip->ip_address); ?></td>
                                 <td class="column-hkdev-ip-active" id="hkdev_mm_ip_status_<?php echo esc_attr($ip->id); ?>"><?php echo ($ip->active == 1) ? '<span class="actived">' . esc_html(__('Yes', 'hkdev-maintenance-mode')) . '</span>' : '<span class="deactived">' . esc_html(__( 'No', 'hkdev-maintenance-mode')) . '</span>'; ?></td>
                                 <td class="column-hkdev-actions">
                                     <span class='edit' id="hkdev_mm_ip_status_<?php echo esc_attr($ip->id); ?>_action">
                                         <?php if ($ip->active == 1) { ?>
-                                            <a href="javascript:hkdev_mm_toggle_ip(0,<?php echo esc_attr($ip->id); ?>);"><?php esc_html_e("Disable", 'hkdev-maintenance-mode'); ?></a> |
+                                            <a href="javascript:hkdev_mm_toggle_ip(0,<?php echo esc_attr($ip->id); ?>);"><?php esc_html_e('Disable', 'hkdev-maintenance-mode'); ?></a> |
                                         <?php } else { ?>
-                                            <a href="javascript:hkdev_mm_toggle_ip(1,<?php echo esc_attr($ip->id); ?>);"><?php esc_html_e("Enable", 'hkdev-maintenance-mode'); ?></a> |
+                                            <a href="javascript:hkdev_mm_toggle_ip(1,<?php echo esc_attr($ip->id); ?>);"><?php esc_html_e('Enable', 'hkdev-maintenance-mode'); ?></a> |
                                         <?php } ?>
                                     </span>
                                     <span class='delete'>
-                                        <a class='submitdelete' href="javascript:hkdev_mm_delete_ip(<?php echo esc_attr($ip->id); ?>,'<?php echo esc_attr(addslashes($ip->ip_address)); ?>');" ><?php esc_html_e("Delete", 'hkdev-maintenance-mode'); ?></a>
+                                        <a class='submitdelete' href="javascript:hkdev_mm_delete_ip(<?php echo esc_attr($ip->id); ?>,'<?php echo esc_attr(wp_slash($ip->ip_address)); ?>');" ><?php esc_html_e("Delete", 'hkdev-maintenance-mode'); ?></a>
                                     </span>
                                 </td>
                             </tr>
@@ -535,9 +746,11 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                         <td class="column-hkdev-ip-ip">
                             <input class="hkdev_mm_disabled_field" type="text" id="hkdev_mm_new_ip_ip" name="hkdev_mm_new_ip_ip" placeholder="<?php esc_html_e("Enter IP:", 'hkdev-maintenance-mode'); ?>">
                         </td>
-                        <td class="column-hkdev-ip-active"><span class='button edit' id="hkdev_mm_add_ip_link">
-                                <a href="javascript:hkdev_mm_add_new_ip();"><?php esc_html_e("Add New IP", 'hkdev-maintenance-mode'); ?></a>
-                            </span></td>
+                        <td class="column-hkdev-ip-active">
+                            <button type="button" class="button button-secondary hkdev-mm-inline-button" id="hkdev_mm_add_ip_link" onclick="hkdev_mm_add_new_ip();">
+                                <?php esc_html_e("Add New IP", 'hkdev-maintenance-mode'); ?>
+                            </button>
+                        </td>
                         <td class="column-hkdev-actions">&nbsp;</td>
                     </tr>
                 </tfoot>
@@ -545,7 +758,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             <?php
         }
 
-        // (php) generate Access Key table data
+        // Generate Access Key table data
         private function print_access_keys()
         {
             global $wpdb;
@@ -562,35 +775,35 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                 </thead>
                 <tbody>
                     <?php
-                    $sql   = "SELECT * FROM {$wpdb->prefix}{$this->admin_options_name}_access_keys ORDER BY name";
-                    $codes = $wpdb->get_results($sql, OBJECT);
+                    $tbl   = esc_sql($wpdb->prefix . $this->admin_options_name . '_access_keys');
+                    $codes = $wpdb->get_results($wpdb->prepare("SELECT * FROM %i ORDER BY name", $tbl), OBJECT);
                     $ak_row_class = 'alternate';
                     if ($codes) {
                         foreach ($codes as $code) { 
                             ?>
                             <tr id="wphkdev-ak-<?php echo esc_attr($code->id); ?>" valign="middle" class="<?php echo esc_attr($ak_row_class); ?>">
-                                <td class="column-hkdev-ak-name"><?php esc_html_e($code->name); ?></td>
-                                <td class="column-hkdev-ak-email"><a href="mailto:<?php echo esc_attr($code->email); ?>" title="email <?php echo esc_attr($code->email); ?>"><?php esc_html_e($code->email); ?></a></td>
-                                <td class="column-hkdev-ak-key"><?php esc_html_e($code->access_key); ?></td>
+                                <td class="column-hkdev-ak-name"><?php echo esc_html($code->name); ?></td>
+                                <td class="column-hkdev-ak-email"><a href="mailto:<?php echo esc_attr($code->email); ?>" title="email <?php echo esc_attr($code->email); ?>"><?php echo esc_html($code->email); ?></a></td>
+                                <td class="column-hkdev-ak-key"><?php echo esc_html($code->access_key); ?></td>
                                 <td class="column-hkdev-ak-active" id="hkdev_mm_ak_status_<?php echo esc_attr($code->id); ?>"><?php echo ($code->active == 1) ? '<span class="actived">' . esc_html(__('Yes', 'hkdev-maintenance-mode')) . '</span>' : '<span class="deactived">' . esc_html(__('No', 'hkdev-maintenance-mode')) . '</span>'; ?></td>
                                 <td class="column-hkdev-actions">
                                     <span class='edit' id="hkdev_mm_ak_status_<?php echo esc_attr($code->id); ?>_action">
                                         <?php if ($code->active == 1) { ?>
-                                            <a href="javascript:hkdev_mm_toggle_ak(0,<?php echo esc_attr($code->id); ?>);"><?php esc_html_e(__("Disable", 'hkdev-maintenance-mode')); ?></a> |
+                                            <a href="javascript:hkdev_mm_toggle_ak(0,<?php echo esc_attr($code->id); ?>);"><?php esc_html_e('Disable', 'hkdev-maintenance-mode'); ?></a> |
                                         <?php } else { ?>
-                                            <a href="javascript:hkdev_mm_toggle_ak(1,<?php echo esc_attr($code->id); ?>);"><?php esc_html_e(__("Enable", 'hkdev-maintenance-mode')); ?></a> |
+                                            <a href="javascript:hkdev_mm_toggle_ak(1,<?php echo esc_attr($code->id); ?>);"><?php esc_html_e('Enable', 'hkdev-maintenance-mode'); ?></a> |
                                         <?php } ?>
                                     </span>
                                     <span class='resend'>
-                                    <?php if(!empty($code->email)) { ?><a class='submitdelete' href="javascript:hkdev_mm_resend_ak(<?php echo esc_attr($code->id); ?>,'<?php echo esc_attr(addslashes($code->name)); ?>','<?php echo esc_attr(addslashes($code->email)); ?>');"><?php esc_html_e(__("Resend Code", 'hkdev-maintenance-mode')); ?></a><?php }else{ echo '<span style="opacity:0.8;pointer-events: none;">' . esc_html(__("Resend Code", 'hkdev-maintenance-mode')) . '</span>'; } ?> | 
+                                    <?php if(!empty($code->email)) { ?><a class='submitdelete' href="javascript:hkdev_mm_resend_ak(<?php echo esc_attr($code->id); ?>,'<?php echo esc_attr(wp_slash($code->name)); ?>','<?php echo esc_attr(wp_slash($code->email)); ?>');"><?php esc_html_e('Resend Code', 'hkdev-maintenance-mode'); ?></a><?php }else{ echo '<span style="opacity:0.8;pointer-events: none;">' . esc_html__('Resend Code', 'hkdev-maintenance-mode') . '</span>'; } ?> | 
                                     </span>
-                                    <?php if ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || $_SERVER['SERVER_PORT'] == 443) { ?>
+                                    <?php $https = isset($_SERVER['HTTPS']) ? sanitize_text_field(wp_unslash($_SERVER['HTTPS'])) : ''; $server_port = isset($_SERVER['SERVER_PORT']) ? absint(wp_unslash($_SERVER['SERVER_PORT'])) : 0; if (($https !== '' && $https !== 'off') || $server_port === 443) { ?>
                                         <span class='copy' id="hkdev_mm_submit_copy_<?php echo esc_attr($code->id); ?>">
-                                            <a class='submitdelete' href="javascript:hkdev_mm_copy_ak(<?php echo esc_attr($code->id); ?>, '<?php echo esc_attr($code->access_key); ?>');" ><?php esc_html_e(__("Copy", 'hkdev-maintenance-mode')); ?></a> | 
+                                            <a class='submitdelete' href="javascript:hkdev_mm_copy_ak(<?php echo esc_attr($code->id); ?>, '<?php echo esc_attr($code->access_key); ?>');" ><?php esc_html_e('Copy', 'hkdev-maintenance-mode'); ?></a> | 
                                         </span>
                                     <?php } ?>
                                     <span class='delete'>
-                                        <a class='submitdelete' href="javascript:hkdev_mm_delete_ak(<?php echo esc_attr($code->id); ?>,'<?php echo esc_attr(addslashes($code->name)); ?>');" ><?php esc_html_e(__("Delete", 'hkdev-maintenance-mode')); ?></a>
+                                        <a class='submitdelete' href="javascript:hkdev_mm_delete_ak(<?php echo esc_attr($code->id); ?>,'<?php echo esc_attr(wp_slash($code->name)); ?>');" ><?php esc_html_e('Delete', 'hkdev-maintenance-mode'); ?></a>
                                     </span>
                                 </td>
                             </tr>
@@ -615,9 +828,9 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                             <input class="hkdev_mm_disabled_field" type="email" id="hkdev_mm_new_ak_email" name="hkdev_mm_new_ak_email" placeholder="<?php esc_html_e("Enter Email:", 'hkdev-maintenance-mode'); ?>">
                         </td>
                         <td class="column-hkdev-ak-key">
-                            <span class='button edit' id="hkdev_mm_add_ak_link">
-                                <a href="javascript:hkdev_mm_add_new_ak();"><?php esc_html_e("Add New Access Key", 'hkdev-maintenance-mode'); ?></a>
-                            </span>
+                            <button type="button" class="button button-secondary hkdev-mm-inline-button" id="hkdev_mm_add_ak_link" onclick="hkdev_mm_add_new_ak();">
+                                <?php esc_html_e("Add New Access Key", 'hkdev-maintenance-mode'); ?>
+                            </button>
                         </td>
                         <td class="column-hkdev-ak-active">&nbsp;</td>
                         <td class="column-hkdev-actions">&nbsp;</td>
@@ -627,7 +840,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             <?php
         }
 
-        // (php) display redirect status if active
+        // Display redirect status if active
         public function display_status_if_active()
         {
             $hkdev_mm_options = $this->get_admin_options();
@@ -637,19 +850,20 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                 $show_notice = true;
             }
             
-            if ($show_notice) {
-                $jq_indicator = '
-                jQuery(".hkdev-indicator").addClass("hkdev-indicator--enabled");
-                jQuery(".hkdev-indicator .hkdev-indicator-title").attr("title", "'. esc_js(_x('Maintenance ON', 'Admin bar indicator', 'hkdev-maintenance-mode')) .'");
-                ';
-            } else {
-                $jq_indicator = '
-                jQuery(".hkdev-indicator").removeClass("hkdev-indicator--enabled");
-                jQuery(".hkdev-indicator .hkdev-indicator-title").attr("title", "'. esc_js(_x('Maintenance OFF', 'Admin bar indicator', 'hkdev-maintenance-mode')) .'");
-                ';
-            }
-            
-            echo '<script>'. wp_json_encode($jq_indicator) .'</script>';
+            $status_title = $show_notice ? _x('Maintenance ON', 'Admin bar indicator', 'hkdev-maintenance-mode') : _x('Maintenance OFF', 'Admin bar indicator', 'hkdev-maintenance-mode');
+            $class_name = $show_notice ? 'hkdev-indicator--enabled' : '';
+
+            echo '<script>
+                jQuery(function($) {
+                    var $indicator = $(".hkdev-indicator");
+                    if (' . ($show_notice ? 'true' : 'false') . ') {
+                        $indicator.addClass("hkdev-indicator--enabled");
+                    } else {
+                        $indicator.removeClass("hkdev-indicator--enabled");
+                    }
+                    $indicator.find(".hkdev-indicator-title").attr("title", ' . wp_json_encode($status_title) . ');
+                });
+            </script>';
         }
 
         //Admin bar indicator
@@ -682,7 +896,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             //$wp_admin_bar->add_node($indicator);
         }
 
-        //Indicator styles
+        // Indicator styles
         public function ab_indicator_style()
         {
             echo '<style type="text/css">
@@ -701,20 +915,23 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             }</style>';
         }
 
-        //Plugin action links
+        // Plugin action links
         public function action_links($links)
         {
            $links[] = '<a href="' . get_admin_url(null, 'options-general.php?page=hkdev_Maintenance_Mode') . '">' . esc_html(_x('Settings', 'Plugin Settings link','hkdev-maintenance-mode')) . '</a>';
            return $links;
         }
 
-        // (php) create the admin page
+        // Create the admin page
         public function print_admin_page()
         {
             global $ajax_nonce;
+            $ajax_nonce = wp_create_nonce('hkdev_nonce');
             $hkdev_mm_options = $this->get_admin_options();
+            $maintenance_message_value = html_entity_decode(wp_unslash($hkdev_mm_options['maintenance_message']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $maintenance_html_value = html_entity_decode(wp_unslash($hkdev_mm_options['maintenance_html']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
-            // process update
+            // Process update
             if (isset($_POST['update_wp_maintenance_mode_settings'])) {
 
                 check_admin_referer('hkdev_nonce');  
@@ -872,7 +1089,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                 }
                 $allowed_html = shapeSpace_allowed_html();
 
-                // prepare options
+                // Prepare options
                 $hkdev_mm_options['header_type']         = isset($_POST['hkdev_mm_header_type']) ? sanitize_text_field(trim($_POST['hkdev_mm_header_type'])) : '';
                 $hkdev_mm_options['static_page']         = isset($_POST['hkdev_mm_static_page']) ? esc_url_raw(trim($_POST['hkdev_mm_static_page'])) : '';
                 $hkdev_mm_options['method']              = isset($_POST['hkdev_mm_method']) ? sanitize_text_field(trim($_POST['hkdev_mm_method'])) : '';
@@ -882,7 +1099,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                 $hkdev_mm_options['exclude_pages']       = isset($_POST['hkdev_mm_exclude_pages']) ? array_map('esc_attr', (array) $_POST['hkdev_mm_exclude_pages']) : array();
                 
                 
-                // update options
+                // Update options
                 update_option($this->admin_options_name, $hkdev_mm_options);
                 echo '<div class="notice notice-success is-dismissible"><p><strong>' . esc_html(_x("Settings Updated", 'Notice when settings updated', 'hkdev-maintenance-mode')) . '</strong></p></div>';
 
@@ -891,21 +1108,21 @@ if (class_exists("HkDevMaintenanceMode") === false) {
             <script type="text/javascript" charset="utf-8">
                 var hkdev_mm_codeEditor_is_ini = false;
 
-                // bind actions
+                // Bind actions
                 jQuery(document).ready(function($) {
 
-                    //(js)  sleep time expects milliseconds
+                    // Sleep time expects milliseconds (js)
                     window.hkdev_sleep = function(time) {
                         return new Promise((resolve) => setTimeout(resolve, time));
                     }
 
-                    //active tab
+                    // Active tab
                     <?php if (isset($_POST['activeTab'])) {
                         $activeTab = esc_attr($_POST['activeTab']);
                         echo '$(".nav-tab-wrapper a").removeClass("nav-tab-active");
                         $(".hkdev_mm_admin_section").addClass("hidden");
-                        $("a[href=\''.$activeTab.'\']").addClass("nav-tab-active");
-                        $("'.$activeTab.'").removeClass("hidden");';
+                        $("a[href=\'' . esc_js($activeTab) . '\']").addClass("nav-tab-active");
+                        $("' . esc_js($activeTab) . '").removeClass("hidden");';
                         
                         if ($activeTab == '#unrestricted-ip' || $activeTab == '#access-keys') { 
                             echo "$('#hkdev_submit_button').hide();";
@@ -915,12 +1132,12 @@ if (class_exists("HkDevMaintenanceMode") === false) {
 
                     } ?>
 
-                    // method mode toggle
+                    // Method mode toggle
                     $('#hkdev_mm_method').on("change", function() { 
                         hkdev_mm_toggle_method_options(); 
                     });
 
-                    // nav tabs settings (hk)
+                    // Nav tabs settings
                     $(".nav-tab-wrapper a").on("click",function() {
                         event.preventDefault();
                         $(".nav-tab-wrapper a").removeClass("nav-tab-active");
@@ -943,7 +1160,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                         hkdev_mm_ini_codeEditor ();
                     }
 
-                    // multiple select with AJAX search
+                    // Multiple select with AJAX search
                     $('#hkdev_mm_exclude_pages').select2({
                         ajax: {
                             url: ajaxurl,
@@ -952,7 +1169,8 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                             data: function (params) {
                                 return {
                                     q: params.term,
-                                    action: 'hkdev_mm_getposts'
+                                    action: 'hkdev_mm_getposts',
+                                    security: '<?php echo esc_js($ajax_nonce); ?>'
                                 };
                             },
                             processResults: function(data) {
@@ -976,24 +1194,24 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                             },
                             inputTooLong: function (args) {
                                 var overChars = args.input.length - args.maximum;
-                                var message = '<?php echo esc_html(sprintf(_x("Please delete %s characters", "Plural", "hkdev-maintenance-mode"), "{overChars}")) ?>';
+                                var message = '<?php /* translators: %s: number of characters. */ echo esc_html(sprintf(_x("Please delete %s characters", "Plural", "hkdev-maintenance-mode"), "{overChars}")) ?>';
                                 if (overChars == 1) {
-                                    message = '<?php echo esc_html(_x("Please delete 1 character", "Singular", "hkdev-maintenance-mode")) ?>';
+                                    message = '<?php /* translators: %s: number of characters. */ echo esc_html(_x("Please delete 1 character", "Singular", "hkdev-maintenance-mode")) ?>';
                                 }
                                 return message.replace('{overChars}',overChars);
                             },
                             inputTooShort: function (args) {
                                 var remainingChars = args.minimum - args.input.length;
-                                var message = '<?php echo esc_html(sprintf(__("Please enter %s or more characters", "hkdev-maintenance-mode"), "{remainingChars}")) ?>';
+                                var message = '<?php /* translators: %s: number of characters. */ echo esc_html(sprintf(__("Please enter %s or more characters", "hkdev-maintenance-mode"), "{remainingChars}")) ?>';
                                 return message.replace('{remainingChars}',remainingChars);
                             },
                             loadingMore: function () {
                             return '<?php esc_html_e("Loading more results…", "hkdev-maintenance-mode") ?>';
                             },
                             maximumSelected: function (args) {
-                                var message = '<?php echo esc_html(sprintf(_x("You can only select %s items", "Plural", "hkdev-maintenance-mode"), "{args.maximum}")) ?>';
+                                var message = '<?php /* translators: %s: number of items. */ echo esc_html(sprintf(_x("You can only select %s items", "Plural", "hkdev-maintenance-mode"), "{args.maximum}")) ?>';
                                 if (args.maximum == 1) {
-                                    message = '<?php  echo esc_html(_x("You can only select 1 item", "Singular", "hkdev-maintenance-mode")) ?>';
+                                    message = '<?php /* translators: %s: number of items. */ echo esc_html(_x("You can only select 1 item", "Singular", "hkdev-maintenance-mode")) ?>';
                                 }
                                 return message.replace('{args.maximum}',args.maximum);
                             },
@@ -1016,13 +1234,13 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                     });
                 });
 
-                //ini wp code editor (hk)
+                // ini wp code editor
                 function hkdev_mm_ini_codeEditor () {
                     wp.codeEditor.initialize(jQuery('#hkdev_mm_maintenance_html'), cm_settings);
                     hkdev_mm_codeEditor_is_ini = true;
                 }
 
-                // (js) update form layout based on method option
+                // Update form layout based on method option (js) 
                 function hkdev_mm_toggle_method_options () {
                     if (jQuery('#hkdev_mm_method').val() == 'redirect') {
                         jQuery('#hkdev_method_message').hide();
@@ -1043,13 +1261,13 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                     }
                 }
 
-                // (js) undim field
+                // Undim field (js)
                 function hkdev_mm_undim_field(field_id, default_text) {
                     if (jQuery('#'+field_id).val() == default_text) jQuery('#'+field_id).val('');
                     jQuery('#'+field_id).css('color','#000');
                 }
 
-                // (js) dim field
+                // Dim field (js)
                 function hkdev_mm_dim_field(field_id, default_text) {
                     if (jQuery('#'+field_id).val() == '') {
                         jQuery('#'+field_id).val(default_text);
@@ -1057,25 +1275,25 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                     }
                 }
 
-                // (js) validate IP4 address
+                // Validate IP4 address (js)
                 function ValidateIPaddress(ipaddress) {
                     if (/^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|\*))$/.test(ipaddress)) {  
                         return (true)
                     }
                 }
 
-                // (js) toggle maintenance mode
+                // Toggle maintenance mode (js)
                 function hkdev_mm_toggle_maintenance_mode () {
                     // prepare ajax data
                     var data = {
                         action: 'hkdev_mm_toggle_maintenance_mode',
-                        security: '<?php echo $ajax_nonce; ?>'
+                        security: '<?php echo esc_js($ajax_nonce); ?>'
                     };
 
-                    // (js) set status to loading
+                    // Set status to loading (js)
                     //jQuery('#hkdev_mm_toggle-wrap').after('<span style="visibility:visible; float:none;" class="spinner switch_spinner"></span>');
 
-                    // send ajax request
+                    // Send ajax request
                     jQuery.post(ajaxurl, data, function(response) {
                         if (response.success) {
                             if (response.data.status != 'YES') {
@@ -1104,9 +1322,9 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                     });
                 }
 
-                // (js) add new IP
+                // Add new IP (js)
                 function hkdev_mm_add_new_ip () {
-                    // validate entries before posting ajax call
+                    // Validate entries before posting ajax call
                     var error_msg = '';
                     if (jQuery('#hkdev_mm_new_ip_name').val() == '') error_msg += '<?php echo esc_js(__("You must enter a Name", 'hkdev-maintenance-mode')); ?>.<br>';
                     if (jQuery('#hkdev_mm_new_ip_ip').val() == '') error_msg += '<?php echo esc_js(__("You must enter an IP", 'hkdev-maintenance-mode')); ?>.<br>';
@@ -1118,38 +1336,38 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                             '</p><button type="button" class="notice-dismiss"><span class="screen-reader-text"><?php echo esc_js(__("Dismiss this notice", 'hkdev-maintenance-mode')); ?></span></button></div>'
                         ).autoDismiss(8000);
                     } else {
-                        // prepare ajax data
+                        // Prepare ajax data
                         var data = {
                             action: 'hkdev_mm_add_ip',
-                            security: '<?php echo $ajax_nonce; ?>',
+                            security: '<?php echo esc_js($ajax_nonce); ?>',
                             hkdev_mm_ip_name: jQuery('#hkdev_mm_new_ip_name').val(),
                             hkdev_mm_ip_ip: jQuery('#hkdev_mm_new_ip_ip').val() 
                         };
 
-                        // set section to loading 
+                        // Set section to loading 
                         jQuery('#hkdev_mm_ip_tbl_container').html('<span style="visibility:visible; float:none;" class="spinner"></span>');
 
-                        // send ajax request
+                        // Send ajax request
                         jQuery.post(ajaxurl, data, function(response) {
                             jQuery('#hkdev_mm_ip_tbl_container').html(response);
                         });
                     }
                 }
 
-                // (js) toggle IP status
+                // Toggle IP status (js)
                 function hkdev_mm_toggle_ip (status, ip_id) {
                     // prepare ajax data
                     var data = {
                         action: 'hkdev_mm_toggle_ip',
-                        security: '<?php echo $ajax_nonce; ?>',
+                        security: '<?php echo esc_js($ajax_nonce); ?>',
                         hkdev_mm_ip_active: status,
                         hkdev_mm_ip_id: ip_id 
                     };
 
-                    // (js) set status to loading
+                    // Set status to loading (js)
                     jQuery('#hkdev_mm_ip_status_' + ip_id).html('<span style="visibility:visible; float:none;" class="spinner"></span>');
 
-                    // send ajax request
+                    // Send ajax request
                     jQuery.post(ajaxurl, data, function(response) {
                         if (response.success) {
                             if (response.data.ip_active == '1') {
@@ -1171,35 +1389,35 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                     });
                 }
  
-                // (js) delete IP
+                // Delete IP (js)
                 function hkdev_mm_delete_ip (ip_id, ip_addr) {
                     if (confirm('<?php echo esc_js(__("You are about to delete the IP address:", 'hkdev-maintenance-mode')); ?>\n\n' + ip_addr)) {
 
                         // prepare ajax data
                         var data = {
                             action: 'hkdev_mm_delete_ip',
-                            security: '<?php echo $ajax_nonce; ?>',
+                            security: '<?php echo esc_js($ajax_nonce); ?>',
                             hkdev_mm_ip_id: ip_id
                         };
                         
-                        // set section to loading
+                        // Set section to loading
                         jQuery('#hkdev_mm_ip_tbl_container').html('<span style="visibility:visible; float:none;" class="spinner"></span>');
                         
-                        // send ajax request
+                        // Send ajax request
                         jQuery.post(ajaxurl, data, function(response) {
                             jQuery('#hkdev_mm_ip_tbl_container').html(response);
                         });
                     }
                 }
 
-                // (js) add new Access Key
+                // Add new Access Key (js)
                 function hkdev_mm_add_new_ak () {
                     // validate entries before posting ajax call
                     var error_msg = '';
                     if (jQuery('#hkdev_mm_new_ak_name').val() == '') error_msg += '<?php echo esc_js(__("You must enter a Name", 'hkdev-maintenance-mode')); ?>.<br>';
                     //if (jQuery('#hkdev_mm_new_ak_email').val() == '') error_msg += '<?php echo esc_js(__("You must enter an Email", 'hkdev-maintenance-mode')); ?>.<br>';
 
-                    //validate email 
+                    // Validate email 
                     var email = jQuery('#hkdev_mm_new_ak_email').val();
                     var emailReg = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
                     if (email!=='' && !emailReg.test(email)) {
@@ -1213,18 +1431,18 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                             '</p><button type="button" class="notice-dismiss"><span class="screen-reader-text"><?php echo esc_js(__("Dismiss this notice", 'hkdev-maintenance-mode')); ?></span></button></div>'
                         ).autoDismiss(8000);
                     } else {
-                        // prepare ajax data
+                        // Prepare ajax data
                         var data = {
                             action: 'hkdev_mm_add_ak',
-                            security: '<?php echo $ajax_nonce; ?>',
+                            security: '<?php echo esc_js($ajax_nonce); ?>',
                             hkdev_mm_ak_name: jQuery('#hkdev_mm_new_ak_name').val(),
                             hkdev_mm_ak_email: jQuery('#hkdev_mm_new_ak_email').val() 
                         };
 
-                        // set section to loading
+                        // Set section to loading
                         jQuery('#hkdev_mm_ak_tbl_container').html('<span style="visibility:visible; float:none;" class="spinner"></span>');
 
-                        // send ajax request
+                        // Send ajax request
                         jQuery.post(ajaxurl, data, function(response) {
                             
                             jQuery('.ajax_notices').html(
@@ -1242,20 +1460,20 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                     }
                 }
 
-                // (js) toggle Access Key status
+                // Toggle Access Key status (js)
                 function hkdev_mm_toggle_ak (status, ak_id) {
                     // prepare ajax data
                     var data = {
                         action: 'hkdev_mm_toggle_ak',
-                        security: '<?php echo $ajax_nonce; ?>',
+                        security: '<?php echo esc_js($ajax_nonce); ?>',
                         hkdev_mm_ak_active: status,
                         hkdev_mm_ak_id: ak_id 
                     };
 
-                    // set status to loading
+                    // Set status to loading
                     jQuery('#hkdev_mm_ak_status_' + ak_id).html('<span style="visibility:visible; float:none;" class="spinner"></span>');
 
-                    // send ajax request
+                    // Send ajax request
                     jQuery.post(ajaxurl, data, function(response) {
                         if (response.success) {
                             if (response.data.ak_active == '1') {
@@ -1277,30 +1495,30 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                     });
                 }
 
-                // (js) delete Access Key
+                // Delete Access Key (js)
                 function hkdev_mm_delete_ak (ak_id, ak_name) {
                     if (confirm('<?php echo esc_js(__("You are about to delete this Access Key:", 'hkdev-maintenance-mode')); ?>\n\n' + ak_name)) {
                         // prepare ajax data
                         var data = {
                             action: 'hkdev_mm_delete_ak',
-                            security: '<?php echo $ajax_nonce; ?>',
+                            security: '<?php echo esc_js($ajax_nonce); ?>',
                             hkdev_mm_ak_id:	ak_id
                         };
 
-                        // set section to loading
+                        // Set section to loading
                         jQuery('#hkdev_mm_ak_tbl_container').html('<span style="visibility:visible; float:none;" class="spinner"></span>');
 
-                        // send ajax request
+                        // Send ajax request
                         jQuery.post(ajaxurl, data, function(response) {
                             jQuery('#hkdev_mm_ak_tbl_container').html(response);
                         });
                     }
                 }
 
-                // (js) Copy Access Key
+                // Copy Access Key (js)
                 function hkdev_mm_copy_ak (ak_id, ak_code) {
                     var savedTxt = jQuery('#hkdev_mm_submit_copy_' + ak_id + ' a').html();
-                    navigator.clipboard.writeText('<?php echo addslashes(get_bloginfo('url')); ?>?hkdev_temp_access_key=' + ak_code).then(() => {
+                    navigator.clipboard.writeText('<?php echo esc_js(get_bloginfo('url')); ?>?hkdev_temp_access_key=' + ak_code).then(() => {
                         jQuery('#hkdev_mm_submit_copy_' + ak_id +' a').html('<span style="color:green"><?php esc_html_e("Copied", 'hkdev-maintenance-mode'); ?></span>');
                         window.hkdev_sleep(5000).then(() => {
                             jQuery('#hkdev_mm_submit_copy_' + ak_id +' a').html(savedTxt);
@@ -1308,17 +1526,17 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                     });
                 }
 
-                // (js) re-send Access Key
+                // Re-send Access Key (js)
                 function hkdev_mm_resend_ak (ak_id, ak_name, ak_email) {
                     if (confirm('<?php echo esc_js(__("You are about to email an Access Key link to ", 'hkdev-maintenance-mode')); ?>' + ak_email)) {
                         // prepare ajax data
                         var data = {
                             action: 'hkdev_mm_resend_ak',
-                            security: '<?php echo $ajax_nonce; ?>',
+                            security: '<?php echo esc_js($ajax_nonce); ?>',
                             hkdev_mm_ak_id: ak_id
                         };
 
-                        // send ajax request
+                        // Send ajax request
                         jQuery.post(ajaxurl, data, function(response) {
                             if (response.success) {
                                 jQuery('.ajax_notices').html(
@@ -1340,14 +1558,14 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                 
                 jQuery(document).ready(function($) {
 
-                    // (js) Dismiss ajax notices
+                    // Dismiss ajax notices (js)
                     $(document).on('click', '.notice.is-dismissible', function() {
                             $(this).slideUp(250, function() {
                             $(this).remove();
                         });
                     });
 
-                    // (js) auto dismiss ajax notices after 10 seconds (jQ Plugin)
+                    // Auto dismiss ajax notices after 10 seconds (js/jQ Plugin)
                     $.fn.autoDismiss = function(time = 10000) {
                         setTimeout(function() {
                             $('.notice.is-dismissible').slideUp(250, function() {
@@ -1421,18 +1639,30 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                 .hkdev_mm_admin_section table input[type="email"] { width: 100%; padding: 0 8px; }
                 .hkdev_mm_admin_section a  { cursor: pointer; }
                 .hkdev_mm_admin_section .no-results { color: #888; }
+                .hkdev-mm-inline-button { margin: 0; padding: 0 8px; line-height: 24px; min-height: 24px; }
+                .hkdev-mm-inline-button:focus { outline: none; box-shadow: none; }
+                .hkdev_mm_admin_section td { line-height: 1em !important; }
+                .select2-container--default .select2-selection--multiple { border-radius: 2px; }
             </style>
 
             <div class=wrap>
-                <form method="post" action="<?php echo htmlspecialchars($_SERVER["REQUEST_URI"]); ?>" >
-                    <h2><?php esc_html_e('Maintenance Mode', 'Settings page title', 'hkdev-maintenance-mode'); ?></h2>
+                <form method="post" action="<?php echo esc_attr(esc_url(wp_unslash($_SERVER['REQUEST_URI']))); ?>" >
+                    <h2><?php esc_html_e('Maintenance Mode', 'hkdev-maintenance-mode'); ?></h2>
 
                     <div class="ajax_notices"></div>
 
                     <div class="notice notice-info">
                         <p>
-                            <?php echo sprintf(esc_html(__("This plugin is intended primarily for developers that need to allow clients to preview sites before being available to the general public.%sAny logged in user with WordPress administrator privileges will be allowed to view the site regardless of the settings below.", 'hkdev-maintenance-mode')),'<br>'); ?><br>
-                            <?php echo sprintf(esc_html__("If you liked this plugin or it was useful to you in any way, I'd be very grateful if you'd %s.", 'hkdev-maintenance-mode'), '<a href="https://paypal.me/helderk" target="_blank" rel="noopener noreferrer">' . esc_html__('pay me a coffee', 'hkdev-maintenance-mode') . '</a>'); ?>
+                            <?php echo sprintf(
+                                /* translators: %s: line break. */
+                                esc_html__('This plugin is intended primarily for developers that need to allow clients to preview sites before being available to the general public.%sAny logged in user with WordPress administrator privileges will be allowed to view the site regardless of the settings below.', 'hkdev-maintenance-mode'),
+                                '<br>'
+                            ); ?><br>
+                            <?php echo sprintf(
+                                /* translators: %s: link to donate. */
+                                esc_html__('If you enjoyed this plugin or found it useful, I\'d really appreciate it if you\'d %s.', 'hkdev-maintenance-mode'),
+                                '<a href="https://paypal.me/helderk" target="_blank" rel="noopener noreferrer">' . esc_html__('buy me a coffee', 'hkdev-maintenance-mode') . '</a>'
+                            ); ?>
                         </p>
                     </div>
 
@@ -1472,12 +1702,12 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                             <div id="hkdev_method_message" style="<?php if ($hkdev_mm_options['method'] == "redirect" || $hkdev_mm_options['method'] == "html") echo "display:none;"; ?>" >
                                 <strong><?php esc_html_e("Site Title", 'hkdev-maintenance-mode'); ?></strong>
                                 <p class="description"><?php esc_html_e('Overrides default site meta title.', 'hkdev-maintenance-mode'); ?></p>
-                                <p style="margin-top: 0;"><input name="hkdev_mm_maintenance_title" type="text" placeholder="<?php echo get_bloginfo('name'); ?>" value="<?php echo esc_attr($hkdev_mm_options['maintenance_title']); ?>" class="regular-text"></p>
+                                <p style="margin-top: 0;"><input name="hkdev_mm_maintenance_title" type="text" placeholder="<?php echo esc_attr(get_bloginfo('name')); ?>" value="<?php echo esc_attr($hkdev_mm_options['maintenance_title']); ?>" class="regular-text"></p>
 
                                 <strong><?php esc_html_e("Message", 'hkdev-maintenance-mode'); ?></strong>
                                 <p class="description"><?php esc_html_e("This is the message that will be displayed while your site is in maintenance mode.", 'hkdev-maintenance-mode'); ?></p>
                                 <p style="margin-top: 0;">
-                                     <?php wp_editor(stripslashes($hkdev_mm_options['maintenance_message']), 'hkdev_mm_maintenance_message'); ?>
+                                     <?php wp_editor($maintenance_message_value, 'hkdev_mm_maintenance_message'); ?>
                                 </p>
                             </div>
 
@@ -1485,7 +1715,7 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                                 <strong><?php esc_html_e("HTML", 'hkdev-maintenance-mode'); ?></strong>
                                 <p class="description"><?php esc_html_e("This is the HTML that will be displayed while your site is in maintenance mode.", 'hkdev-maintenance-mode'); ?></p>
                                 <p style="margin-top: 0;">
-                                    <textarea id="hkdev_mm_maintenance_html" name="hkdev_mm_maintenance_html" rows="10" style="width:100%"><?php echo esc_textarea(stripslashes($hkdev_mm_options['maintenance_html'])); ?></textarea>
+                                    <textarea id="hkdev_mm_maintenance_html" name="hkdev_mm_maintenance_html" rows="10" style="width:100%"><?php echo esc_textarea($maintenance_html_value); ?></textarea>
                                 </p>
                             </div>
 
@@ -1502,14 +1732,12 @@ if (class_exists("HkDevMaintenanceMode") === false) {
                             <select class="select" name="hkdev_mm_exclude_pages[]"  id="hkdev_mm_exclude_pages" multiple="multiple" style="width:30%" >
                             <?php
                             if (isset($hkdev_mm_options['exclude_pages'])) {
-                                $options ='';
                                 foreach ($hkdev_mm_options['exclude_pages'] as $post_id) {
                                     $title = get_the_title($post_id);
-                                    // if the post title is too long, truncate it and add "..." at the end
+                                    // If the post title is too long, truncate it and add "..." at the end
                                     $title = (mb_strlen($title) > 50) ? mb_substr($title, 0, 49) . '...' : $title;
-                                    $options .= '<option value="' . $post_id . '" selected="selected">' . $title . '</option>';
+                                    echo '<option value="' . esc_attr($post_id) . '" selected="selected">' . esc_html($title) . '</option>';
                                 }
-                                echo $options;
                             }
                             ?>
                             </select>
@@ -1535,11 +1763,11 @@ if (class_exists("HkDevMaintenanceMode") === false) {
 
                         <div id="unrestricted-ip" class="hkdev_mm_admin_section hidden">
                             <h3><?php esc_html_e("Unrestricted IP addresses", 'hkdev-maintenance-mode'); ?><br>
-                            <span class="hkdev_mm_small_dim"><?php esc_html_e("Your IP address is:", 'hkdev-maintenance-mode'); ?>&nbsp;<a id="hkdev_set_ip"><?php echo $this->get_user_ip(); ?></a> - <?php esc_html_e("Your Class C is:", 'hkdev-maintenance-mode'); ?>&nbsp;<a id="hkdev_set_ip_c"><?php echo $this->get_user_class_c(); ?></a></span></h3>
+                            <span class="hkdev_mm_small_dim"><?php esc_html_e("Your IP address is:", 'hkdev-maintenance-mode'); ?>&nbsp;<a id="hkdev_set_ip"><?php echo esc_html($this->get_user_ip()); ?></a> - <?php esc_html_e("Your Class C is:", 'hkdev-maintenance-mode'); ?>&nbsp;<a id="hkdev_set_ip_c"><?php echo esc_html($this->get_user_class_c()); ?></a></span></h3>
                             <p><?php esc_html_e("Users with unrestricted IP addresses will bypass maintenance mode entirely. Using this option is useful to an entire office of clients to view the site without needing to jump through any extra hoops.", 'hkdev-maintenance-mode'); ?></p> 
                             <script>
-                                jQuery("#hkdev_set_ip").on("click", function() { jQuery("#hkdev_mm_new_ip_ip").val("<?php echo $this->get_user_ip(); ?>")});
-                                jQuery("#hkdev_set_ip_c").on("click", function() { jQuery("#hkdev_mm_new_ip_ip").val("<?php echo $this->get_user_class_c(); ?>")});
+                                jQuery("#hkdev_set_ip").on("click", function() { jQuery("#hkdev_mm_new_ip_ip").val("<?php echo esc_js($this->get_user_ip()); ?>")});
+                                jQuery("#hkdev_set_ip_c").on("click", function() { jQuery("#hkdev_mm_new_ip_ip").val("<?php echo esc_js($this->get_user_class_c()); ?>")});
                             </script>
                             <div id="hkdev_mm_ip_tbl_container">
                                 <?php $this->print_unrestricted_ips(); ?>

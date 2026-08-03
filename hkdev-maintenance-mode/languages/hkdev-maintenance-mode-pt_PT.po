@@ -2,14 +2,17 @@
 # This file is distributed under the same license as the Plugins - Maintenance Mode package.
 msgid ""
 msgstr ""
-"PO-Revision-Date: 2024-03-18 12:24+0000\n"
+"Project-Id-Version: Plugins - Maintenance Mode\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-03-18 12:18+0000\n"
+"PO-Revision-Date: 2026-08-03 00:00+0000\n"
+"Last-Translator: Helderk\n"
+"Language-Team: Português\n"
+"Language: pt_PT\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=n != 1;\n"
-"Language: pt_PT\n"
-"Project-Id-Version: Plugins - Maintenance Mode\n"
-"Language-Team: Português\n"
 
 #: class-hkdev-maintenance-mode.php:561
 msgid "Access Key"
@@ -45,6 +48,11 @@ msgstr "Chave de acesso para %s"
 #: class-hkdev-maintenance-mode.php:1445 class-hkdev-maintenance-mode.php:1538
 msgid "Access Keys"
 msgstr "Chaves de Acesso"
+
+#: class-hkdev-maintenance-mode.php:1633
+#, php-format
+msgid "If you enjoyed this plugin or found it useful, I'd really appreciate it if you'd %s."
+msgstr "Se gostou deste plugin ou se lhe foi útil de alguma forma, ficaria muito grato se me oferecesse %s."
 
 #: class-hkdev-maintenance-mode.php:494 class-hkdev-maintenance-mode.php:563
 msgid "Actions"
@@ -97,6 +105,10 @@ msgstr "Copiado"
 msgid "Delete"
 msgstr "Apagar"
 
+#: class-hkdev-maintenance-mode.php:778
+msgid "Copy"
+msgstr "Copiar"
+
 #: class-hkdev-maintenance-mode.php:512 class-hkdev-maintenance-mode.php:1161
 #: class-hkdev-maintenance-mode.php:1267
 msgid "Disable"
@@ -128,24 +140,24 @@ msgstr "E-mail"
 
 #: class-hkdev-maintenance-mode.php:1209
 msgid "Email address not valid"
-msgstr "Email inválido"
+msgstr "E-mail inválido"
 
 #: class-hkdev-maintenance-mode.php:1335
 msgid "Email sending failed. Please check your server settings"
-msgstr "O envio do email falhou. Verifique as definições do seu servidor"
+msgstr "O envio do e-mail falhou. Verifique as definições do seu servidor"
 
 #: class-hkdev-maintenance-mode.php:514 class-hkdev-maintenance-mode.php:1165
 #: class-hkdev-maintenance-mode.php:1271
 msgid "Enable"
-msgstr "Activar"
+msgstr "Ativar"
 
 #: class-hkdev-maintenance-mode.php:1427
 msgid "Enable Maintenance Mode"
-msgstr "Activar o modo de manutenção"
+msgstr "Ativar o modo de manutenção"
 
 #: class-hkdev-maintenance-mode.php:618
 msgid "Enter Email:"
-msgstr "Insira o E-Mail:"
+msgstr "Insira o e-mail:"
 
 #: class-hkdev-maintenance-mode.php:539
 msgid "Enter IP:"
@@ -158,24 +170,17 @@ msgstr "Insira o nome:"
 #: class-hkdev-maintenance-mode.php:331
 msgctxt "Error message adding new IP"
 msgid "Unable to add IP because of a database error. Please reload the page."
-msgstr ""
-"Não é possível adicionar o IP devido a um erro na base de dados. Por favor, "
-"recarregue a página."
+msgstr "Não é possível adicionar o IP devido a um erro na base de dados. Por favor, recarregue a página."
 
 #: class-hkdev-maintenance-mode.php:385
 msgctxt "Error message deleting IP"
-msgid ""
-"Unable to delete IP because of a database error. Please reload the page."
-msgstr ""
-"Não é possível eliminar o IP devido a um erro na base de dados. Por favor, "
-"recarregue a página."
+msgid "Unable to delete IP because of a database error. Please reload the page."
+msgstr "Não é possível eliminar o IP devido a um erro na base de dados. Por favor, recarregue a página."
 
 #: class-hkdev-maintenance-mode.php:475
 msgctxt "Error message sending Access Key email"
 msgid "There was an unknown error sending the email. Please reload the page."
-msgstr ""
-"Ocorreu um erro desconhecido no envio do email. Por favor, recarregue a "
-"página."
+msgstr "Ocorreu um erro desconhecido no envio do e-mail. Por favor, recarregue a página."
 
 #: class-hkdev-maintenance-mode.php:367
 msgctxt "Error message when toggle IP status"
@@ -189,11 +194,11 @@ msgstr "Existe um erro desconhecido. Por favor, volte a carregar a página."
 
 #: class-hkdev-maintenance-mode.php:1442
 msgid "Exclude Pages"
-msgstr "Páginas Excluidas"
+msgstr "Páginas excluídas"
 
 #: class-hkdev-maintenance-mode.php:1488
 msgid "Exclude pages"
-msgstr "Páginas excluidas"
+msgstr "Páginas excluídas"
 
 #: class-hkdev-maintenance-mode.php:1443 class-hkdev-maintenance-mode.php:1507
 msgid "Header Type"
@@ -260,7 +265,6 @@ msgid "Message"
 msgstr "Mensagem"
 
 #: class-hkdev-maintenance-mode.php:1453
-#| msgid "Message - Site syle Method"
 msgid "Message - Site style Method"
 msgstr "Mensagem - Método com estilos do site"
 
@@ -278,8 +282,8 @@ msgctxt "Message error when unable to add Access Key"
 msgid ""
 "Unable to add Access Key because of a database error. Please reload the page."
 msgstr ""
-"Não é possível adicionar a Chave de Acesso devido a um erro na base de dados."
-" Por favor recarregue a página."
+"Não é possível adicionar a Chave de Acesso devido a um erro na base de "
+"dados. Por favor recarregue a página."
 
 #: class-hkdev-maintenance-mode.php:451
 msgctxt "Message error when unable to delete Access Key"
@@ -314,7 +318,7 @@ msgstr "Nenhum resultado encontrado"
 #: class-hkdev-maintenance-mode.php:890
 msgctxt "Notice when settings updated"
 msgid "Settings Updated"
-msgstr "Definições actualizadas"
+msgstr "Definições atualizadas"
 
 #: class-hkdev-maintenance-mode.php:1462
 msgid "Overrides default site meta title."
@@ -370,7 +374,7 @@ msgstr "A seguinte ligação dar-lhe-á acesso temporário a %s:"
 #, php-format
 msgctxt "Resend Access Key Email Subject, %s = name of the website/blog"
 msgid "Access Key Link for %s"
-msgstr "The following link will give you temporary access to %s:"
+msgstr "Chave de acesso para %s"
 
 #: class-hkdev-maintenance-mode.php:588
 msgid "Resend Code"
@@ -393,7 +397,7 @@ msgstr ""
 
 #. Description of the plugin
 msgid "Simple Maintenance Mode for Developers"
-msgstr "Modo de manutenção simples para Developers"
+msgstr "Modo de manutenção simples para programadores"
 
 #: class-hkdev-maintenance-mode.php:984
 msgctxt "Singular"
@@ -411,20 +415,18 @@ msgstr "Título do site"
 
 #: class-hkdev-maintenance-mode.php:1481
 msgid "Static Maintenance Page"
-msgstr " Página de manutenção estática"
+msgstr "Página de manutenção estática"
 
 #: class-hkdev-maintenance-mode.php:978
 msgid "The results could not be loaded."
 msgstr "Não foi possível carregar os resultados."
 
 #: class-hkdev-maintenance-mode.php:1120 class-hkdev-maintenance-mode.php:1215
-#| msgid "There is a problem with the information you have entered"
 msgid "There is a problem with the information you have entered:"
 msgstr "Há um problema com as informações que inseriu:"
 
 #: class-hkdev-maintenance-mode.php:1102 class-hkdev-maintenance-mode.php:1170
 #: class-hkdev-maintenance-mode.php:1276
-#| msgid "There was a database error. Please reload this page"
 msgid "There was a database error. Please try reload this page"
 msgstr "Houve um erro na base de dados. Por favor recarregue a página"
 
@@ -462,13 +464,20 @@ msgid "Unrestricted IP addresses"
 msgstr "Endereços IP sem restrições"
 
 #: class-hkdev-maintenance-mode.php:1444
-#| msgid "Unrestricted IP"
 msgid "Unrestricted IP's"
 msgstr "IP's sem restrições"
 
 #: class-hkdev-maintenance-mode.php:1550
 msgid "Update Settings"
-msgstr "Atualizar configurações"
+msgstr "Atualizar definições"
+
+#: class-hkdev-maintenance-mode.php:1633
+msgid "buy me a coffee"
+msgstr "um café"
+
+#: hkdev-disable-rest-api.php:51
+msgid "REST API restricted to authenticated users."
+msgstr "A API REST está restrita a utilizadores autenticados."
 
 #: class-hkdev-maintenance-mode.php:1527
 msgid ""

@@ -3,8 +3,8 @@
  * Plugin Name:		Maintenance Mode
  * Plugin URI:		https://helderk.com/
  * Description:		Simple Maintenance Mode for Developers
- * Version:			3.1.3
- * Tested up to:	6.7.2
+ * Version:			3.2.1
+ * Tested up to:	7.0.2
  * Text Domain:		hkdev-maintenance-mode
  * Domain Path:		/languages/
  * License:			GPLv2 or later
@@ -28,16 +28,39 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
+// Stop direct access to the plugin files for security.
 if (!defined('ABSPATH')) die(); // exit if accessed directly
 
-//include class
+// Load the main plugin class that contains the maintenance mode logic.
 include_once( plugin_dir_path( __FILE__ ) . 'class-hkdev-maintenance-mode.php' );
 
-// load textdomain
+// Initialize the plugin after WordPress has loaded core functions.
 add_action('init', 'hkdev_maintenance_mode_initialize');
 
+/**
+ * Prepare the plugin state when it is activated.
+ *
+ * This runs once during activation and initializes the maintenance mode class.
+ */
+function hkdev_maintenance_mode_activate() {
+    if (class_exists('HkDevMaintenanceMode')) {
+        $maintenance_mode = new HkDevMaintenanceMode();
+        $maintenance_mode->init();
+    }
+}
+
+register_activation_hook(__FILE__, 'hkdev_maintenance_mode_activate');
+
+/**
+ * Main bootstrap function for the plugin.
+ *
+ * This loads translations, creates the core plugin object, registers the
+ * admin page, loads editor assets on the settings screen, and wires the
+ * maintenance-mode hooks and AJAX actions used by the plugin.
+ */
 function hkdev_maintenance_mode_initialize(){
 
+	// Load translations from the languages folder.
 	load_plugin_textdomain('hkdev-maintenance-mode', false, dirname(plugin_basename(__FILE__)) . '/languages/');
 
     if (class_exists("HkDevMaintenanceMode")) {
@@ -45,7 +68,7 @@ function hkdev_maintenance_mode_initialize(){
         $hkdev_MM = new HkDevMaintenanceMode();
     }
 
-	// initialize the admin and users panel
+	// Register the admin settings page for users who can manage options.
 	if (!function_exists("hkdev_maintenance_mode_ap")) {
 		function hkdev_maintenance_mode_ap() {
 			if (current_user_can('manage_options')) {
@@ -66,24 +89,29 @@ function hkdev_maintenance_mode_initialize(){
 		}
 	}
 
-	// initialize codemirror enqueue scripts (hk)
+	// Load CodeMirror and Select2 assets only on the plugin settings page.
 	if (!function_exists("hkdev_codemirror_enqueue_scripts")) {
 		function hkdev_codemirror_enqueue_scripts($hook_suffix) {
 			if ($hook_suffix == 'settings_page_hkdev_Maintenance_Mode') {
-				$cm_settings['codeEditor'] = wp_enqueue_code_editor(array('type' => 'text/html'));
-				wp_localize_script('jquery', 'cm_settings', $cm_settings);
-				//wp_enqueue_script('wp-theme-plugin-editor');
-				wp_enqueue_style('wp-codemirror');
+				if (function_exists('wp_enqueue_code_editor')) {
+					$cm_settings['codeEditor'] = wp_enqueue_code_editor(array('type' => 'text/html'));
+					wp_localize_script('jquery', 'cm_settings', $cm_settings);
+				}
+
+				if (wp_style_is('wp-codemirror', 'registered')) {
+					wp_enqueue_style('wp-codemirror');
+				}
+
 				wp_enqueue_style('hkdev_select2', plugin_dir_url(__FILE__) . '/assets/select2.min.css', array(), '4.1.0' );
 				wp_enqueue_script('hkdev_select2', plugin_dir_url(__FILE__) . '/assets/select2.min.js', array('jquery'), '4.1.0', true );
 			}
 		}
 	}
 
-	// actions and filters	
+	// Register the WordPress hooks, filters and AJAX actions used by the plugin.
 	if( isset( $hkdev_MM ) ) {
 
-		// disable REST API if maintenance mode is active
+		// Disable the REST API when maintenance mode is enabled.
 	 	$admin_options = $hkdev_MM->get_admin_options();
 		if($admin_options['enable_mm']=='YES') {
 			$disable_rest_api = plugin_dir_path( __FILE__ ) . 'hkdev-disable-rest-api.php';
@@ -92,14 +120,12 @@ function hkdev_maintenance_mode_initialize(){
 				
 			} else {
 				//add WP notice notice-error
-				add_action( 'admin_notices', function() {
-					echo '<div class="notice notice-error"><p>' . __( 'The REST API is not disabled because the plugin has encountered an error. Please reinstall the plugin.', 'hkdev-maintenance-mode' ) . '</p></div>';
-				} );
+				add_action( 'admin_notices', 'hkdev_maintenance_mode_rest_api_error_notice' );
 			}
 		}
 	
 
-		// actions
+		// Register the main admin and frontend actions.
 		add_action( 'admin_menu',			 'hkdev_maintenance_mode_ap' );
 		add_action( 'admin_bar_menu',		 array( $hkdev_MM, 'ab_indicator'), 100 ); //hk
 		add_action( 'admin_head',			 array( $hkdev_MM, 'ab_indicator_style' ) ); //hk
@@ -107,7 +133,7 @@ function hkdev_maintenance_mode_initialize(){
 		add_action( 'admin_notices',		 array( $hkdev_MM, 'display_status_if_active' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename(__FILE__), array($hkdev_MM, 'action_links'));
 		
-		// ajax actions
+		// Register the AJAX endpoints used by the settings page.
 		add_action( 'wp_ajax_hkdev_mm_getposts',  array( $hkdev_MM, 'get_posts_ajax_callback') ); // wp_ajax_{action}
 		add_action( 'wp_ajax_hkdev_mm_toggle_maintenance_mode', array( $hkdev_MM, 'toggle_maintenance_mode') );
 		add_action( 'wp_ajax_hkdev_mm_add_ip',    array( $hkdev_MM, 'add_new_ip'       ) );
@@ -120,8 +146,10 @@ function hkdev_maintenance_mode_initialize(){
 
 		add_action( 'admin_enqueue_scripts', 'hkdev_codemirror_enqueue_scripts' ); //hk
 		
-		// activation ( deactivation is later enhancement... )
-		register_activation_hook( __FILE__, array( $hkdev_MM, 'init' ) );
 	}
 
+}
+
+function hkdev_maintenance_mode_rest_api_error_notice() {
+	echo '<div class="notice notice-error"><p>' . esc_html__( 'The REST API is not disabled because the plugin has encountered an error. Please reinstall the plugin.', 'hkdev-maintenance-mode' ) . '</p></div>';
 }

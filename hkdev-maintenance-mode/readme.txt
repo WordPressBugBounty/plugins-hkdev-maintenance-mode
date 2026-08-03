@@ -1,41 +1,43 @@
 === Maintenance Mode ===
 Contributors: helderk, jfinch3, petervandoorn
 Tags: maintenance,redirect,developer,coming soon,under construction
-Requires at least: 6.1
-Tested up to: 6.7.2
-Stable tag: 3.0.1
+Requires at least: 6.2
+Tested up to: 7.0.2
+Stable tag: 3.2.1
 Requires PHP: 7.4
 Text Domain: hkdev-maintenance-mode
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 Donate link: https://paypal.me/helderk
 
-This plugin is intended primarily for developers that need to allow clients to preview sites before being available to the general public or to temporarily hide your WordPress site while undergoing major updates.
+This plugin is intended primarily for developers who need to allow clients to preview sites before public launch, or temporarily hide a WordPress site while performing major updates.
 
 
 == Description ==
-This plugin lets you specify a maintenance mode message or HTML page for your site and configure settings to allow specific users to bypass the maintenance mode functionality in order to preview the site prior to public launch. 
+This plugin lets you place a WordPress site into maintenance mode and display a custom message, HTML page, or redirect users to a static page or external URL.
 
-It also disables the WordPress REST API while maintenance mode is active, ensuring that site data remains inaccessible during maintenance. 
+It also disables the WordPress REST API while maintenance mode is active, helping keep site data inaccessible during maintenance.
 
-Any logged in user with WordPress administrator privileges will be allowed to view the site regardless of the settings in the plugin. The exact privilege can be set using a filter hook - see FAQs.
+Any logged-in user with administrator privileges can be allowed to view the site, and the required capability can be changed through a filter hook. See the FAQ section for details.
 
-The behaviour of this can be enabled or disabled at any time without losing any of settings configured in its settings pane. However, deactivating the plugin is recommended versus having it activated while disabled.
+The maintenance mode behavior can be enabled or disabled at any time without losing the configured settings. However, deactivating the plugin is still recommended when maintenance mode is not needed.
 
-Functionality to exclude pages from maintenance mode, so only the selected pages will be visible.
+The plugin also supports excluding specific pages from maintenance mode so only selected pages remain visible.
 
-When redirect is enabled it can send 2 different header types. “200 OK” is best used for when the site is under development and “503 Service Temporarily Unavailable” is best for when the site is temporarily taken offline for small amendments. If used for a long period of time, 503 can damage your Google ranking.
+When maintenance mode is active, the plugin sends no-cache headers to help prevent caching plugins, CDNs, or browsers from storing responses that would bypass the maintenance page.
 
-A list of IP addresses can be set up to completely bypass maintenance mode. This option is useful when needing to allow a client’s entire office to access the site while in maintenance mode without needing to maintain individual access keys.
+When redirect mode is enabled, the plugin can send two different response codes. “200 OK” is suitable for development environments, while “503 Service Temporarily Unavailable” is better when the site is temporarily taken offline. If used for long periods, 503 may negatively affect search engine visibility.
 
-Access keys work by creating a key on the user’s computer that will be checked against when maintenance mode is active. When a new key is created, a link to create the access key cookie will be emailed to the email address provided. Access can then be revoked either by disabling or deleting the key.
+A list of IP addresses can be configured to bypass maintenance mode completely. This is useful for allowing an entire office or client team to access the site without managing individual access keys.
 
-This plugin allows four methods of notifying users that a site is undergoing maintenance:
+Access keys work by creating a key on the user’s computer that is checked while maintenance mode is active. When a new key is created, a link to store the access key cookie is sent to the email address provided. Access can then be revoked by disabling or deleting the key.
 
-  1. They can be presented with a message using WordPress’s wp_die() function which is core function of WordPress, which makes this plugin feel and work as a part of WordPress core.
-  2. They can be presented with a message on a page created with the style of the current template.
-  3. They can be presented with a custom HMTL page.
-  4. They can be redirected to a static page or external URL.
+This plugin offers four ways to present the maintenance experience:
+
+  1. A message rendered with WordPress’s wp_die() function, making the experience feel native to WordPress.
+  2. A page styled with the active theme’s template.
+  3. A custom HTML page.
+  4. A redirect to a static page or external URL.
 
 
 == Installation ==
@@ -57,11 +59,12 @@ This allows you to run pretty much any test you like, although be aware that the
 This example looks in the `$_SERVER` global to see if any part of the URL contains "demo"
 
 	function my_hkdev_matches( $hkdev_matches ) {
-		if ( stristr( $_SERVER['REQUEST_URI'], 'demo' ) ) 
+		if ( stristr( $_SERVER['REQUEST_URI'], 'demo' ) ) {
 			$hkdev_matches[] = "<!-- Demo -->";
+		}
 		return $hkdev_matches;
 	}
-	add_filter( "hkdev_matches", "my_hkdev_matches" );`
+	add_filter( "hkdev_matches", "my_hkdev_matches" );
 
 *Props to @brianhenryie for this!*
 
@@ -80,6 +83,17 @@ This filter is used to pass a different WordPress capability to check if the log
 
 
 == Changelog ==
+
+= 3.2.1 =
+* Bug fixes and code quality improvements
+* Security and maintenance hardening updates
+
+= 3.2.0 =
+* Updated for WordPress 7.0.2 compatibility
+* Improved security hardening
+* Improved REST API handling during maintenance mode
+* Compatibility improvements for admin notices and asset loading
+* Added no-cache headers while maintenance mode is active to reduce caching conflicts
 
 = 3.1.3 =
 * Bug fix
